@@ -1,0 +1,23 @@
+{
+  "name": "aws-nav-assistant",
+  "version": "1.0.0",
+  "description": "AI-powered AWS navigation assistant browser extension",
+  "private": true,
+  "workspaces": [
+    "extension",
+    "backend",
+    "shared"
+  ],
+  "scripts": {
+    "install:all": "npm install && cd extension && npm install && cd ../backend && npm install && cd ../shared && npm install",
+    "build:extension": "cd extension && npm run build",
+    "build:backend": "cd backend && npm run build",
+    "dev:extension": "cd extension && npm run watch",
+    "dev:backend": "cd backend && npm run dev",
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:extension\"",
+    "type-check": "cd extension && npm run type-check && cd ../backend && npm run type-check"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

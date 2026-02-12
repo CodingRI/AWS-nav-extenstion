@@ -1,0 +1,49 @@
+{
+  "manifest_version": 3,
+  "name": "AWS Navigation Assistant",
+  "version": "1.0.0",
+  "description": "AI-powered assistant to guide you through AWS console navigation",
+
+  "permissions": ["storage", "activeTab", "scripting"],
+
+  "host_permissions": [
+    "*://*.console.aws.amazon.com/*",
+    "*://*.aws.amazon.com/*",
+    "http://localhost:3000/*"
+  ],
+
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.console.aws.amazon.com/*",
+        "*://*.aws.amazon.com/console/*"
+      ],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle",
+      "all_frames": false,
+      "match_about_blank": true
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["content.js", "content.css"],
+      "matches": ["*://*.aws.amazon.com/*"]
+    }
+  ],
+
+  "action": {
+    "default_icon": {
+      "16": "icon.png"
+    }
+  },
+
+  "icons": {
+    "16": "icon.png"
+  }
+}

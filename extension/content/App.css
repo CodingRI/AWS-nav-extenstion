@@ -1,0 +1,384 @@
+/* AWS Navigator - Dark Theme */
+
+.aws-nav-assistant {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu',
+    'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Floating toggle button - SMALLER */
+.aws-nav-toggle {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #0A0E27 0%, #1A1F3A 100%);
+  border: 2px solid #00D9FF;
+  color: #00D9FF;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0, 217, 255, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.3s ease;
+  z-index: 999998;
+}
+
+.aws-nav-toggle:hover {
+  transform: scale(1.1);
+  box-shadow: 0 6px 20px rgba(0, 217, 255, 0.5);
+  background: linear-gradient(135deg, #1A1F3A 0%, #0A0E27 100%);
+}
+
+/* Main container - SMALLER SIZE */
+.aws-nav-container {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  width: 320px; /* Reduced from 400px */
+  max-height: 500px; /* Reduced from 600px */
+  background: #0A0E27;
+  border: 1px solid #1E2847;
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  display: flex;
+  flex-direction: column;
+  z-index: 999998;
+  overflow: hidden;
+  transition: all 0.3s ease;
+}
+
+.aws-nav-container.minimized {
+  max-height: 48px;
+}
+
+/* Header */
+.aws-nav-header {
+  background: linear-gradient(135deg, #0A0E27 0%, #1A1F3A 100%);
+  border-bottom: 1px solid #1E2847;
+  color: #00D9FF;
+  padding: 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.aws-nav-header-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 14px;
+  color: #00D9FF;
+}
+
+.aws-nav-header-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.aws-nav-header-actions button {
+  background: rgba(0, 217, 255, 0.1);
+  border: 1px solid rgba(0, 217, 255, 0.2);
+  color: #00D9FF;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+.aws-nav-header-actions button:hover {
+  background: rgba(0, 217, 255, 0.2);
+  border-color: #00D9FF;
+}
+
+/* Messages area */
+.aws-nav-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: #0F1429;
+}
+
+.aws-nav-message {
+  display: flex;
+  flex-direction: column;
+  max-width: 85%;
+  animation: slideIn 0.3s ease;
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.aws-nav-message.user {
+  align-self: flex-end;
+}
+
+.aws-nav-message.assistant {
+  align-self: flex-start;
+}
+
+.aws-nav-message-content {
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.aws-nav-message.user .aws-nav-message-content {
+  background: linear-gradient(135deg, #00D9FF 0%, #00A3CC 100%);
+  color: #0A0E27;
+  font-weight: 500;
+  border-bottom-right-radius: 3px;
+}
+
+.aws-nav-message.assistant .aws-nav-message-content {
+  background: #1A1F3A;
+  color: #E0E6ED;
+  border: 1px solid #1E2847;
+  border-bottom-left-radius: 3px;
+}
+
+/* Spinner */
+.aws-nav-spinner {
+  animation: spin 1s linear infinite;
+  display: inline-block;
+  margin-right: 6px;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* Guide panel with tree */
+.aws-nav-guide-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: #0F1429;
+  overflow-y: auto;
+}
+
+.aws-nav-guide-start {
+  padding: 16px;
+  display: flex;
+  justify-content: center;
+}
+
+.aws-nav-button-start {
+  padding: 10px 24px;
+  background: linear-gradient(135deg, #00D9FF 0%, #00A3CC 100%);
+  color: #0A0E27;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.aws-nav-button-start:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 217, 255, 0.4);
+}
+
+/* Step tree */
+.aws-nav-step-tree {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.aws-nav-step-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px;
+  border-radius: 8px;
+  transition: all 0.3s ease;
+  position: relative;
+}
+
+.aws-nav-step-item.pending {
+  opacity: 0.4;
+}
+
+.aws-nav-step-item.current {
+  background: rgba(0, 217, 255, 0.1);
+  border: 1px solid rgba(0, 217, 255, 0.3);
+}
+
+.aws-nav-step-item.completed {
+  opacity: 0.7;
+}
+
+.aws-nav-step-icon {
+  flex-shrink: 0;
+  color: #00D9FF;
+  padding-top: 2px;
+}
+
+.aws-nav-step-icon .pulse {
+  animation: pulse-icon 2s ease-in-out infinite;
+}
+
+@keyframes pulse-icon {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.aws-nav-step-content {
+  flex: 1;
+}
+
+.aws-nav-step-number {
+  font-size: 11px;
+  color: #6B7B94;
+  font-weight: 600;
+  margin-bottom: 2px;
+  text-transform: uppercase;
+}
+
+.aws-nav-step-text {
+  font-size: 13px;
+  color: #E0E6ED;
+  line-height: 1.4;
+}
+
+.aws-nav-step-connector {
+  position: absolute;
+  left: 28px;
+  top: 100%;
+  color: #1E2847;
+  margin-top: -10px;
+}
+
+/* Guide controls */
+.aws-nav-guide-controls {
+  padding: 12px;
+  background: #0A0E27;
+  border-top: 1px solid #1E2847;
+  display: flex;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.aws-nav-button-stop {
+  padding: 8px 16px;
+  background: rgba(255, 77, 77, 0.15);
+  color: #FF6B6B;
+  border: 1px solid rgba(255, 77, 77, 0.3);
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.aws-nav-button-stop:hover {
+  background: rgba(255, 77, 77, 0.25);
+  border-color: #FF6B6B;
+}
+
+/* Input area */
+.aws-nav-input-container {
+  padding: 12px;
+  background: #0A0E27;
+  border-top: 1px solid #1E2847;
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.aws-nav-input {
+  flex: 1;
+  padding: 10px 12px;
+  background: #1A1F3A;
+  border: 1px solid #1E2847;
+  border-radius: 8px;
+  color: #E0E6ED;
+  font-size: 13px;
+  outline: none;
+  transition: all 0.2s ease;
+}
+
+.aws-nav-input:focus {
+  border-color: #00D9FF;
+  background: #0F1429;
+}
+
+.aws-nav-input::placeholder {
+  color: #6B7B94;
+}
+
+.aws-nav-send-button {
+  width: 38px;
+  height: 38px;
+  border-radius: 8px;
+  border: none;
+  background: linear-gradient(135deg, #00D9FF 0%, #00A3CC 100%);
+  color: #0A0E27;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+
+.aws-nav-send-button:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 217, 255, 0.4);
+}
+
+.aws-nav-send-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Scrollbar */
+.aws-nav-messages::-webkit-scrollbar,
+.aws-nav-guide-panel::-webkit-scrollbar {
+  width: 5px;
+}
+
+.aws-nav-messages::-webkit-scrollbar-track,
+.aws-nav-guide-panel::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.aws-nav-messages::-webkit-scrollbar-thumb,
+.aws-nav-guide-panel::-webkit-scrollbar-thumb {
+  background: #1E2847;
+  border-radius: 3px;
+}
+
+.aws-nav-messages::-webkit-scrollbar-thumb:hover,
+.aws-nav-guide-panel::-webkit-scrollbar-thumb:hover {
+  background: #2A3552;
+}
