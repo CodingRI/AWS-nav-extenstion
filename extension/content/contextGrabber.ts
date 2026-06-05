@@ -78,11 +78,10 @@ function scanAndRankElements(): InteractiveElement[] {
   const collected: InteractiveElement[] = [];
   const seen = new Set<Element>();
 
-  // Grab all potentially interactive elements
   const candidates = document.querySelectorAll(
     'button, a[href], [role="button"], [role="link"], [role="tab"], ' +
-    '[role="menuitem"], [role="option"], input:not([type="hidden"]), ' +
-    'select, textarea'
+      '[role="menuitem"], [role="option"], input:not([type="hidden"]), ' +
+      'select, textarea'
   );
 
   for (const el of Array.from(candidates)) {
@@ -91,7 +90,6 @@ function scanAndRankElements(): InteractiveElement[] {
 
     const htmlEl = el as HTMLElement;
 
-    // Hard filters — always skip
     if (isExtensionUI(htmlEl)) continue;
     if (!isVisible(htmlEl)) continue;
     if (htmlEl.hasAttribute("disabled")) continue;
@@ -99,7 +97,10 @@ function scanAndRankElements(): InteractiveElement[] {
     if (htmlEl.getAttribute("aria-hidden") === "true") continue;
 
     const label = getLabel(htmlEl);
-    if (!label) continue; // No text = not useful to AI
+
+    if (!label) continue;
+
+    if (label.length > 120) continue;
 
     collected.push({
       tagName: htmlEl.tagName.toLowerCase(),
@@ -119,27 +120,95 @@ function scanAndRankElements(): InteractiveElement[] {
 
   return collected;
 }
+//helper to find better elements
+function findInputLabel(input: HTMLInputElement): string | null {
 
+  const labelledBy = input.getAttribute("aria-labelledby");
+
+if (labelledBy) {
+  const labelEl = document.getElementById(labelledBy);
+
+  const text = labelEl?.textContent?.trim();
+
+  if (text) {
+    return text;
+  }
+}
+  const aria = input.getAttribute("aria-label");
+  if (aria?.trim()) return aria.trim();
+
+  const placeholder = input.getAttribute("placeholder");
+  if (placeholder?.trim()) return placeholder.trim();
+
+  const id = input.id;
+  if (id) {
+    const label = document.querySelector(`label[for="${id}"]`);
+    const text = label?.textContent?.trim();
+    if (text) return text;
+  }
+
+  let parent: HTMLElement | null = input.parentElement;
+
+  for (let i = 0; i < 4 && parent; i++) {
+    const label = parent.querySelector("label");
+    const text = label?.textContent?.trim();
+
+    if (text && text.length < 80) {
+      return text;
+    }
+
+    parent = parent.parentElement;
+  }
+
+  return null;
+}
 
 /**
  * Get the most useful label for an element.
  */
 function getLabel(el: HTMLElement): string {
-  // Prefer aria-label
-  const ariaLabel = (el.getAttribute("aria-label") || "").trim();
-  if (ariaLabel) return ariaLabel;
+
 
   // title attribute
   const title = (el.getAttribute("title") || "").trim();
   if (title) return title;
 
   // For inputs, use placeholder
-  if (el.tagName === "INPUT") {
-    const ph = (el.getAttribute("placeholder") || "").trim();
-    if (ph) return `[input: ${ph}]`;
-    const type = el.getAttribute("type") || "text";
-    return `[input type=${type}]`;
+  //for seperately labeled renders on AWS 
+  const tag = el.tagName;
+
+if (tag === "INPUT") {
+  const label = findInputLabel(el as HTMLInputElement);
+
+  if (label) {
+    return `[input: ${label}]`;
   }
+
+  const type = el.getAttribute("type") || "text";
+  return `[input type=${type}]`;
+}
+
+if (tag === "TEXTAREA") {
+  const label =
+    el.getAttribute("aria-label") ||
+    el.getAttribute("placeholder") ||
+    "textarea";
+
+  return `[textarea: ${label}]`;
+}
+
+if (tag === "SELECT") {
+  const label =
+    el.getAttribute("aria-label") ||
+    el.getAttribute("name") ||
+    "dropdown";
+
+  return `[dropdown: ${label}]`;
+}
+
+  // Prefer aria-label
+  const ariaLabel = (el.getAttribute("aria-label") || "").trim();
+  if (ariaLabel) return ariaLabel;
 
   // Direct text content — prefer shallow text to avoid pulling in children
   const directText = Array.from(el.childNodes)
