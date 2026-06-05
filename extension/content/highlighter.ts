@@ -31,8 +31,12 @@ export class ElementHighlighter {
     const el = await this.findWithRetries(step, 15, 500);
 
     if (!el) {
-      console.error("[Highlighter] ❌ Element not found after all strategies");
-      return null;
+       console.warn(
+    "[Highlighter] Could not locate:",
+    step.targetText
+  );
+
+  return null;
     }
 
     console.log("[Highlighter] ✅ Found element:", {
@@ -114,7 +118,6 @@ export class ElementHighlighter {
       );
     }
     this.targetClickHandler = null;
-
   }
 
   /**
@@ -162,6 +165,42 @@ export class ElementHighlighter {
     }
     return null;
   }
+
+  private findInputElement(targetText: string): HTMLElement | null {
+    const label = targetText
+      .replace("[input:", "")
+      .replace("]", "")
+      .trim()
+      .toLowerCase();
+
+    const inputs = document.querySelectorAll(
+      'input, textarea, [contenteditable="true"]',
+    );
+
+    for (const el of Array.from(inputs)) {
+      const htmlEl = el as HTMLElement;
+
+      const placeholder = ((el as HTMLInputElement).placeholder || "")
+        .toLowerCase()
+        .trim();
+
+      const aria = (htmlEl.getAttribute("aria-label") || "")
+        .toLowerCase()
+        .trim();
+
+      const name = (htmlEl.getAttribute("name") || "").toLowerCase().trim();
+
+      if (
+        placeholder.includes(label) ||
+        aria.includes(label) ||
+        name.includes(label)
+      ) {
+        return htmlEl;
+      }
+    }
+
+    return null;
+  }
   /**
    * Waterfall element-finding strategy.
    * Tries multiple strategies including Shadow DOM traversal for awsui-* components.
@@ -170,66 +209,134 @@ export class ElementHighlighter {
     const targetText = (step.targetText || "").trim();
     const targetSelector = (step.targetSelector || "").trim();
 
+    if (targetText.startsWith("[input:")) {
+      const inputMatch = this.findInputElement(targetText);
+
+      if (inputMatch) {
+        this._lastFindStrategy = "input-match";
+        console.log("[Highlighter] ✓ Found input element");
+        return inputMatch;
+      }
+    }
+
     if (!targetText && !targetSelector) return null;
 
     // Strategy 1: Exact aria-label — main DOM then Shadow DOM
     if (targetText) {
       const el = this.findByAriaLabel(targetText, true);
-      if (el) { this._lastFindStrategy = "exact-aria-label"; console.log("[Highlighter] ✓ Found via exact aria-label"); return el; }
-      const shadow = this.searchShadowByAttribute("aria-label", targetText, true);
-      if (shadow) { this._lastFindStrategy = "exact-aria-label-shadow"; console.log("[Highlighter] ✓ Found via exact aria-label (shadow DOM)"); return shadow; }
+      if (el) {
+        this._lastFindStrategy = "exact-aria-label";
+        console.log("[Highlighter] ✓ Found via exact aria-label");
+        return el;
+      }
+      const shadow = this.searchShadowByAttribute(
+        "aria-label",
+        targetText,
+        true,
+      );
+      if (shadow) {
+        this._lastFindStrategy = "exact-aria-label-shadow";
+        console.log("[Highlighter] ✓ Found via exact aria-label (shadow DOM)");
+        return shadow;
+      }
     }
 
     // Strategy 2: Exact collapsed-text match — main DOM then Shadow DOM
     if (targetText) {
       const el = this.findByExactText(targetText);
-      if (el) { this._lastFindStrategy = "exact-text"; console.log("[Highlighter] ✓ Found via exact text"); return el; }
+      if (el) {
+        this._lastFindStrategy = "exact-text";
+        console.log("[Highlighter] ✓ Found via exact text");
+        return el;
+      }
       const shadow = this.searchShadowByText(targetText, true);
-      if (shadow) { this._lastFindStrategy = "exact-text-shadow"; console.log("[Highlighter] ✓ Found via exact text (shadow DOM)"); return shadow; }
+      if (shadow) {
+        this._lastFindStrategy = "exact-text-shadow";
+        console.log("[Highlighter] ✓ Found via exact text (shadow DOM)");
+        return shadow;
+      }
     }
 
     // Strategy 3: data-analytics-metadata match
     if (targetText) {
       const el = this.findByDataAnalytics(targetText);
-      if (el) { this._lastFindStrategy = "data-analytics"; console.log("[Highlighter] ✓ Found via data-analytics-metadata"); return el; }
+      if (el) {
+        this._lastFindStrategy = "data-analytics";
+        console.log("[Highlighter] ✓ Found via data-analytics-metadata");
+        return el;
+      }
     }
 
     // Strategy 4: Contains aria-label — main DOM then Shadow DOM
     if (targetText) {
       const el = this.findByAriaLabel(targetText, false);
-      if (el) { this._lastFindStrategy = "contains-aria-label"; console.log("[Highlighter] ✓ Found via contains aria-label"); return el; }
-      const shadow = this.searchShadowByAttribute("aria-label", targetText, false);
-      if (shadow) { this._lastFindStrategy = "contains-aria-label-shadow"; console.log("[Highlighter] ✓ Found via contains aria-label (shadow DOM)"); return shadow; }
+      if (el) {
+        this._lastFindStrategy = "contains-aria-label";
+        console.log("[Highlighter] ✓ Found via contains aria-label");
+        return el;
+      }
+      const shadow = this.searchShadowByAttribute(
+        "aria-label",
+        targetText,
+        false,
+      );
+      if (shadow) {
+        this._lastFindStrategy = "contains-aria-label-shadow";
+        console.log(
+          "[Highlighter] ✓ Found via contains aria-label (shadow DOM)",
+        );
+        return shadow;
+      }
     }
 
     // Strategy 5: Contains text in Shadow DOM
     if (targetText) {
       const shadow = this.searchShadowByText(targetText, false);
-      if (shadow) { this._lastFindStrategy = "contains-text-shadow"; console.log("[Highlighter] ✓ Found via contains text (shadow DOM)"); return shadow; }
+      if (shadow) {
+        this._lastFindStrategy = "contains-text-shadow";
+        console.log("[Highlighter] ✓ Found via contains text (shadow DOM)");
+        return shadow;
+      }
     }
 
     // Strategy 6: Scored text match (handles whitespace, sidebar penalty)
     if (targetText) {
       const el = this.findBestElementForText(targetText);
-      if (el) { this._lastFindStrategy = "scored-text"; console.log("[Highlighter] ✓ Found via scored text match"); return el; }
+      if (el) {
+        this._lastFindStrategy = "scored-text";
+        console.log("[Highlighter] ✓ Found via scored text match");
+        return el;
+      }
     }
 
     // Strategy 7: CSS selector fallback
     if (targetSelector) {
       const el = this.findByCSSSelector(targetSelector);
-      if (el) { this._lastFindStrategy = "css-selector"; console.log("[Highlighter] ✓ Found via CSS selector fallback"); return el; }
+      if (el) {
+        this._lastFindStrategy = "css-selector";
+        console.log("[Highlighter] ✓ Found via CSS selector fallback");
+        return el;
+      }
     }
 
     // Strategy 8: Word-boundary matching
     if (targetText && targetText.length > 3) {
       const el = this.findByWordBoundary(targetText);
-      if (el) { this._lastFindStrategy = "word-boundary"; console.log("[Highlighter] ✓ Found via word-boundary match"); return el; }
+      if (el) {
+        this._lastFindStrategy = "word-boundary";
+        console.log("[Highlighter] ✓ Found via word-boundary match");
+        return el;
+      }
     }
 
     // Strategy 9: Fuzzy text matching (Levenshtein distance ≤ 3)
     if (targetText && targetText.length > 3) {
       const el = this.findByFuzzyText(targetText, 3);
-      if (el) { this._lastFindStrategy = "fuzzy-text"; console.log("[Highlighter] ✓ Found via fuzzy text match"); return el; }
+      if (el) {
+        this._lastFindStrategy = "fuzzy-text";
+        console.log("[Highlighter] ✓ Found via fuzzy text match");
+        return el;
+      }
     }
 
     this._lastFindStrategy = "none";
@@ -256,18 +363,27 @@ export class ElementHighlighter {
       const elements = root.querySelectorAll(`[${attribute}]`);
       for (const el of Array.from(elements)) {
         const htmlEl = el as HTMLElement;
-        const attrVal = (htmlEl.getAttribute(attribute) || "").toLowerCase().trim();
+        const attrVal = (htmlEl.getAttribute(attribute) || "")
+          .toLowerCase()
+          .trim();
         const matches = exact
           ? attrVal === normalized
           : attrVal.includes(normalized) || normalized.includes(attrVal);
-        if (matches && this.isValidTarget(htmlEl) && !this.isInSideNav(htmlEl)) {
+        if (
+          matches &&
+          this.isValidTarget(htmlEl) &&
+          !this.isInSideNav(htmlEl)
+        ) {
           return htmlEl;
         }
       }
       return null;
     };
 
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+    const walker = document.createTreeWalker(
+      document.body,
+      NodeFilter.SHOW_ELEMENT,
+    );
     let node = walker.nextNode();
     while (node) {
       const el = node as Element;
@@ -286,8 +402,12 @@ export class ElementHighlighter {
   private searchShadowByText(text: string, exact: boolean): HTMLElement | null {
     const normalized = text.toLowerCase().trim();
     const selectors = [
-      "button", "a", 'div[role="button"]', 'span[role="button"]',
-      "awsui-button", "awsui-link",
+      "button",
+      "a",
+      'div[role="button"]',
+      'span[role="button"]',
+      "awsui-button",
+      "awsui-link",
     ];
 
     const searchRoot = (root: Document | ShadowRoot): HTMLElement | null => {
@@ -300,14 +420,19 @@ export class ElementHighlighter {
             .replace(/\s+/g, " ")
             .trim()
             .toLowerCase();
-          const matches = exact ? elText === normalized : elText.includes(normalized);
+          const matches = exact
+            ? elText === normalized
+            : elText.includes(normalized);
           if (matches && !this.isInSideNav(htmlEl)) return htmlEl;
         }
       }
       return null;
     };
 
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+    const walker = document.createTreeWalker(
+      document.body,
+      NodeFilter.SHOW_ELEMENT,
+    );
     let node = walker.nextNode();
     while (node) {
       const el = node as Element;
@@ -327,9 +452,13 @@ export class ElementHighlighter {
   private findByExactText(text: string): HTMLElement | null {
     const normalized = text.toLowerCase().trim();
     const selectors = [
-      "button", "a",
-      'div[role="button"]', 'span[role="button"]',
-      '[role="link"]', '[role="tab"]', '[role="menuitem"]',
+      "button",
+      "a",
+      'div[role="button"]',
+      'span[role="button"]',
+      '[role="link"]',
+      '[role="tab"]',
+      '[role="menuitem"]',
     ];
 
     let sidebarMatch: HTMLElement | null = null;
@@ -365,7 +494,9 @@ export class ElementHighlighter {
 
     for (const el of Array.from(allElements)) {
       const htmlEl = el as HTMLElement;
-      const label = (htmlEl.getAttribute("aria-label") || "").toLowerCase().trim();
+      const label = (htmlEl.getAttribute("aria-label") || "")
+        .toLowerCase()
+        .trim();
 
       const matches = exact
         ? label === normalized
@@ -391,7 +522,9 @@ export class ElementHighlighter {
 
     for (const el of Array.from(allElements)) {
       const htmlEl = el as HTMLElement;
-      const metadata = (htmlEl.getAttribute("data-analytics-metadata") || "").toLowerCase().trim();
+      const metadata = (htmlEl.getAttribute("data-analytics-metadata") || "")
+        .toLowerCase()
+        .trim();
 
       if (metadata.includes(normalized) && this.isValidTarget(htmlEl)) {
         return htmlEl;
@@ -412,17 +545,17 @@ export class ElementHighlighter {
       const aria = (el.getAttribute("aria-label") || "").trim();
       if (aria) return aria.toLowerCase();
       // Collapse all nested text content (whitespace-normalised)
-      return (el.textContent || "")
-        .replace(/\s+/g, " ")
-        .trim()
-        .toLowerCase();
+      return (el.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
     };
 
-    interface Candidate { el: HTMLElement; score: number; }
+    interface Candidate {
+      el: HTMLElement;
+      score: number;
+    }
     const candidates: Candidate[] = [];
 
     const allInteractive = document.querySelectorAll(
-      'button, a[href], [role="button"], [role="link"], [role="tab"], [role="menuitem"]'
+      'button, a[href], [role="button"], [role="link"], [role="tab"], [role="menuitem"]',
     );
 
     for (const el of Array.from(allInteractive)) {
@@ -469,7 +602,7 @@ export class ElementHighlighter {
 
       // Penalise containers that have interactive children inside them
       const interactiveChildren = htmlEl.querySelectorAll(
-        'button, a, input, [role="button"]'
+        'button, a, input, [role="button"]',
       ).length;
       score -= interactiveChildren * 20;
 
@@ -485,18 +618,18 @@ export class ElementHighlighter {
 
     candidates.sort((a, b) => b.score - a.score);
     console.log(
-      "[Highlighter] Scored candidates for", JSON.stringify(text), ":",
+      "[Highlighter] Scored candidates for",
+      JSON.stringify(text),
+      ":",
       candidates.slice(0, 5).map((c) => ({
-        label: (cleanText(c.el)).substring(0, 40),
+        label: cleanText(c.el).substring(0, 40),
         tag: c.el.tagName,
         score: c.score,
-      }))
+      })),
     );
 
     return candidates[0]!.el;
   }
-
-
 
   /**
    * Try a CSS selector directly.
@@ -710,8 +843,14 @@ export class ElementHighlighter {
       return false;
     }
     // Don't highlight navigation utility controls
-    const label = (el.getAttribute("aria-label") || el.textContent || "").toLowerCase().trim();
-    if (/^(open|close|toggle|expand|collapse)\s+(navigation|nav|sidebar|drawer|menu)/i.test(label)) {
+    const label = (el.getAttribute("aria-label") || el.textContent || "")
+      .toLowerCase()
+      .trim();
+    if (
+      /^(open|close|toggle|expand|collapse)\s+(navigation|nav|sidebar|drawer|menu)/i.test(
+        label,
+      )
+    ) {
       return false;
     }
     return true;
@@ -942,8 +1081,6 @@ export class ElementHighlighter {
     `;
     document.head.appendChild(style);
   }
-
-  
 }
 
 export const highlighter = new ElementHighlighter();

@@ -56,6 +56,7 @@ export interface GuidanceStep {
   instruction: string;     // human-readable: "Click the 'Create bucket' button"
   targetSelector: string;  // ARIA label, text label, or CSS selector
   targetText: string;      // visible text of the target element
+  fallbackText : string,
   waitFor: string;         // what should appear after clicking (for DOM settle)
   stepIndex: number;       // 0-based, incremented by session manager
   pageUrl?: string;        // URL where this step was issued
