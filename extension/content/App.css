@@ -1,4 +1,4 @@
-/* AWS Navigator - Dark Theme */
+/* AWS Navigator — Dark Theme (v2) */
 
 .aws-nav-assistant {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu',
@@ -7,7 +7,7 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Floating toggle button - SMALLER */
+/* Floating toggle button */
 .aws-nav-toggle {
   position: fixed;
   bottom: 20px;
@@ -33,13 +33,31 @@
   background: linear-gradient(135deg, #1A1F3A 0%, #0A0E27 100%);
 }
 
-/* Main container - SMALLER SIZE */
+/* Active guidance indicator on toggle button */
+.aws-nav-toggle-indicator {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 10px;
+  height: 10px;
+  background: #00FF88;
+  border-radius: 50%;
+  border: 2px solid #0A0E27;
+  animation: aws-nav-indicator-pulse 2s ease-in-out infinite;
+}
+
+@keyframes aws-nav-indicator-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* Main container */
 .aws-nav-container {
   position: fixed;
   bottom: 20px;
   right: 20px;
-  width: 320px; /* Reduced from 400px */
-  max-height: 500px; /* Reduced from 600px */
+  width: 340px;
+  max-height: 520px;
   background: #0A0E27;
   border: 1px solid #1E2847;
   border-radius: 12px;
@@ -76,6 +94,28 @@
   color: #00D9FF;
 }
 
+/* Status badges */
+.aws-nav-status-badge {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.aws-nav-status-badge.active {
+  background: rgba(0, 255, 136, 0.15);
+  color: #00FF88;
+  border: 1px solid rgba(0, 255, 136, 0.3);
+}
+
+.aws-nav-status-badge.paused {
+  background: rgba(255, 187, 51, 0.15);
+  color: #FFBB33;
+  border: 1px solid rgba(255, 187, 51, 0.3);
+}
+
 .aws-nav-header-actions {
   display: flex;
   gap: 6px;
@@ -109,12 +149,13 @@
   flex-direction: column;
   gap: 10px;
   background: #0F1429;
+  min-height: 120px;
 }
 
 .aws-nav-message {
   display: flex;
   flex-direction: column;
-  max-width: 85%;
+  max-width: 90%;
   animation: slideIn 0.3s ease;
 }
 
@@ -135,6 +176,11 @@
 
 .aws-nav-message.assistant {
   align-self: flex-start;
+}
+
+.aws-nav-message.system {
+  align-self: center;
+  max-width: 95%;
 }
 
 .aws-nav-message-content {
@@ -158,6 +204,66 @@
   border-bottom-left-radius: 3px;
 }
 
+.aws-nav-message.system .aws-nav-message-content {
+  background: rgba(0, 217, 255, 0.08);
+  color: #8B9DC3;
+  border: 1px solid rgba(0, 217, 255, 0.15);
+  font-size: 12px;
+  text-align: center;
+  border-radius: 6px;
+}
+
+/* Error messages */
+.aws-nav-message.error {
+  align-self: flex-start;
+  max-width: 95%;
+}
+
+.aws-nav-message.error .aws-nav-message-content {
+  background: rgba(255, 77, 77, 0.1);
+  color: #FFB3B3;
+  border: 1px solid rgba(255, 77, 77, 0.25);
+  border-radius: 6px;
+  font-size: 12px;
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
+
+.aws-nav-error-icon {
+  display: inline-block;
+  margin-right: 6px;
+  color: #FF6B6B;
+  vertical-align: middle;
+}
+
+/* Retry button */
+.aws-nav-retry-button {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 8px;
+  padding: 6px 14px;
+  background: rgba(0, 217, 255, 0.12);
+  color: #00D9FF;
+  border: 1px solid rgba(0, 217, 255, 0.3);
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.aws-nav-retry-button:hover:not(:disabled) {
+  background: rgba(0, 217, 255, 0.22);
+  border-color: #00D9FF;
+  transform: translateY(-1px);
+}
+
+.aws-nav-retry-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 /* Spinner */
 .aws-nav-spinner {
   animation: spin 1s linear infinite;
@@ -170,41 +276,26 @@
   to { transform: rotate(360deg); }
 }
 
-/* Guide panel with tree */
-.aws-nav-guide-panel {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  background: #0F1429;
+/* Step progress panel */
+.aws-nav-step-progress {
+  background: #0A0E27;
+  border-top: 1px solid #1E2847;
+  max-height: 150px;
   overflow-y: auto;
 }
 
-.aws-nav-guide-start {
-  padding: 16px;
-  display: flex;
-  justify-content: center;
-}
-
-.aws-nav-button-start {
-  padding: 10px 24px;
-  background: linear-gradient(135deg, #00D9FF 0%, #00A3CC 100%);
-  color: #0A0E27;
-  border: none;
-  border-radius: 8px;
-  font-size: 14px;
+.aws-nav-step-progress-header {
+  padding: 8px 12px;
+  font-size: 11px;
+  color: #6B7B94;
   font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s ease;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid #1E2847;
 }
 
-.aws-nav-button-start:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0, 217, 255, 0.4);
-}
-
-/* Step tree */
-.aws-nav-step-tree {
-  padding: 16px;
+.aws-nav-step-list {
+  padding: 8px;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -213,30 +304,25 @@
 .aws-nav-step-item {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
-  padding: 10px;
-  border-radius: 8px;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
   transition: all 0.3s ease;
-  position: relative;
-}
-
-.aws-nav-step-item.pending {
-  opacity: 0.4;
-}
-
-.aws-nav-step-item.current {
-  background: rgba(0, 217, 255, 0.1);
-  border: 1px solid rgba(0, 217, 255, 0.3);
 }
 
 .aws-nav-step-item.completed {
-  opacity: 0.7;
+  opacity: 0.6;
+}
+
+.aws-nav-step-item.current {
+  background: rgba(0, 217, 255, 0.08);
+  border: 1px solid rgba(0, 217, 255, 0.2);
 }
 
 .aws-nav-step-icon {
   flex-shrink: 0;
   color: #00D9FF;
-  padding-top: 2px;
+  padding-top: 1px;
 }
 
 .aws-nav-step-icon .pulse {
@@ -244,60 +330,73 @@
 }
 
 @keyframes pulse-icon {
-  0%, 100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.5;
-  }
-}
-
-.aws-nav-step-content {
-  flex: 1;
-}
-
-.aws-nav-step-number {
-  font-size: 11px;
-  color: #6B7B94;
-  font-weight: 600;
-  margin-bottom: 2px;
-  text-transform: uppercase;
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
 }
 
 .aws-nav-step-text {
-  font-size: 13px;
+  font-size: 12px;
   color: #E0E6ED;
   line-height: 1.4;
 }
 
-.aws-nav-step-connector {
-  position: absolute;
-  left: 28px;
-  top: 100%;
-  color: #1E2847;
-  margin-top: -10px;
+.aws-nav-step-item.completed .aws-nav-step-text {
+  text-decoration: line-through;
+  color: #6B7B94;
 }
 
-/* Guide controls */
+/* Controls area */
+.aws-nav-controls {
+  flex-shrink: 0;
+}
+
+/* Paused session info */
+.aws-nav-paused-info {
+  padding: 8px 12px;
+  background: rgba(255, 187, 51, 0.06);
+  border-top: 1px solid rgba(255, 187, 51, 0.15);
+  border-bottom: 1px solid rgba(255, 187, 51, 0.15);
+}
+
+.aws-nav-paused-label {
+  font-size: 10px;
+  color: #FFBB33;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+}
+
+.aws-nav-paused-step {
+  font-size: 12px;
+  color: #E0E6ED;
+  line-height: 1.3;
+  opacity: 0.8;
+}
+
+/* Guide controls (stop/resume) */
 .aws-nav-guide-controls {
-  padding: 12px;
+  padding: 8px 12px;
   background: #0A0E27;
   border-top: 1px solid #1E2847;
   display: flex;
   justify-content: center;
-  flex-shrink: 0;
+  gap: 8px;
 }
 
 .aws-nav-button-stop {
-  padding: 8px 16px;
+  padding: 6px 14px;
   background: rgba(255, 77, 77, 0.15);
   color: #FF6B6B;
   border: 1px solid rgba(255, 77, 77, 0.3);
   border-radius: 6px;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .aws-nav-button-stop:hover {
@@ -305,9 +404,26 @@
   border-color: #FF6B6B;
 }
 
+.aws-nav-button-resume {
+  padding: 6px 14px;
+  background: rgba(0, 255, 136, 0.15);
+  color: #00FF88;
+  border: 1px solid rgba(0, 255, 136, 0.3);
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.aws-nav-button-resume:hover {
+  background: rgba(0, 255, 136, 0.25);
+  border-color: #00FF88;
+}
+
 /* Input area */
 .aws-nav-input-container {
-  padding: 12px;
+  padding: 10px 12px;
   background: #0A0E27;
   border-top: 1px solid #1E2847;
   display: flex;
@@ -363,22 +479,22 @@
 
 /* Scrollbar */
 .aws-nav-messages::-webkit-scrollbar,
-.aws-nav-guide-panel::-webkit-scrollbar {
+.aws-nav-step-progress::-webkit-scrollbar {
   width: 5px;
 }
 
 .aws-nav-messages::-webkit-scrollbar-track,
-.aws-nav-guide-panel::-webkit-scrollbar-track {
+.aws-nav-step-progress::-webkit-scrollbar-track {
   background: transparent;
 }
 
 .aws-nav-messages::-webkit-scrollbar-thumb,
-.aws-nav-guide-panel::-webkit-scrollbar-thumb {
+.aws-nav-step-progress::-webkit-scrollbar-thumb {
   background: #1E2847;
   border-radius: 3px;
 }
 
 .aws-nav-messages::-webkit-scrollbar-thumb:hover,
-.aws-nav-guide-panel::-webkit-scrollbar-thumb:hover {
+.aws-nav-step-progress::-webkit-scrollbar-thumb:hover {
   background: #2A3552;
 }
