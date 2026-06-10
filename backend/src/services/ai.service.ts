@@ -73,7 +73,7 @@ export class AIService {
    * System prompt — defines the AI's role and output format.
    */
   private getSystemPrompt(): string {
-    return `You are an AWS Console navigation expert embedded in a browser extension. 
+    return `You are an AWS Console navigation expert embedded in a browser extension.
 Your job is to guide users step-by-step through AWS Console tasks.
 
 You will receive:
@@ -84,23 +84,26 @@ You will receive:
 You must respond with EXACTLY ONE next action in this JSON format:
 {
   "instruction": "Human-readable instruction (e.g., Click the 'Create bucket' button)",
-  "targetText": "Exact visible text of the element to interact with (e.g., Create bucket)",
-  "targetSelector": "Best selector: aria-label value, or CSS selector (e.g., Create bucket)",
-  "waitFor": "What should appear after this action (e.g., Bucket creation form)",
+  "targetText": "Exact visible text or aria-label of the element to click",
+  "targetSelector": "Same as targetText — the text/label used to find the element",
+  "waitFor": "What should appear after this action",
   "isComplete": false,
-  "message": "Optional additional context"
+  "message": "Optional context"
 }
 
 CRITICAL RULES:
-1. ALWAYS pick targetText from the ACTUAL visible elements listed in the context. Do NOT invent element names.
-2. targetText should be the exact text as shown in the visible elements list.
-3. targetSelector should be the aria-label of the element if available, otherwise the text content.
-4. Give only ONE action at a time — the user will come back with new context after completing it.
-5. If the goal is already accomplished on the current page, set isComplete to true.
-6. Keep instructions clear and specific. Reference the exact button/link text.
-7. If the required element is not in the visible elements list, describe what the user should look for.
-8. For text inputs, use instruction like "Type 'value' in the 'Field name' input field".
-9. ALWAYS respond with valid JSON. No markdown, no explanation outside the JSON.`;
+1. Study ALL visible elements carefully — the correct element may be anywhere in the list.
+2. Pick the element whose text/label is MOST RELEVANT to the goal. Do not just pick the first element.
+3. ALWAYS pick targetText from the ACTUAL visible elements listed. Do NOT invent names.
+4. targetText must exactly match the text or aria-label as listed in the elements.
+5. targetSelector must be the same value as targetText.
+6. Do NOT repeat a step that is already in the completed history.
+7. If the current page already shows exactly what the user needs (e.g., a form to fill out), instruct them to interact with that — don't navigate elsewhere.
+8. Give only ONE action at a time.
+9. If the goal is already accomplished on the current page, set isComplete to true.
+10. ALWAYS respond with valid JSON only. No markdown, no text outside the JSON object.
+11. For navigation goals (e.g. "go to EC2"), pick the direct service link if it is listed — even if it is a simple link.
+12. NEVER pick generic utility buttons like "Add widgets", "Open CloudShell" unless explicitly relevant to the goal.`;
   }
 
   /**
@@ -109,24 +112,22 @@ CRITICAL RULES:
   private buildContextAwarePrompt(request: NextStepRequest): string {
     const { goal, pageContext, history } = request;
 
-    // Format visible elements list
+    const formatEl = (el: typeof pageContext.visibleButtons[0], i: number) => {
+      const parts = [`${i + 1}. [${el.tagName}]`];
+      if (el.text) parts.push(`text="${el.text}"`);
+      if (el.ariaLabel && el.ariaLabel !== el.text) parts.push(`aria-label="${el.ariaLabel}"`);
+      if (el.role) parts.push(`role="${el.role}"`);
+      return parts.join(' ');
+    };
+
     const elementsList = pageContext.visibleButtons
-      .slice(0, 40) // Cap to prevent token overflow
-      .map((el, i) => {
-        const parts = [`${i + 1}. [${el.tagName}]`];
-        if (el.text) parts.push(`text="${el.text}"`);
-        if (el.ariaLabel) parts.push(`aria-label="${el.ariaLabel}"`);
-        if (el.role) parts.push(`role="${el.role}"`);
-        return parts.join(' ');
-      })
+      .map((el, i) => formatEl(el, i))
       .join('\n');
 
-    // Format history
     const historyText = history.length === 0
       ? 'None — this is the first step.'
       : history.map((h, i) => `${i + 1}. ${h.instruction} ✓`).join('\n');
 
-    // Format form state
     const formStateText = Object.keys(pageContext.formState).length > 0
       ? Object.entries(pageContext.formState)
           .map(([k, v]) => `- ${k}: ${v}`)
@@ -140,21 +141,20 @@ CRITICAL RULES:
 - URL: ${pageContext.url}
 - Service: ${pageContext.service}
 - View: ${pageContext.view}
-- Page Title: ${pageContext.title}
 - Breadcrumbs: ${pageContext.breadcrumb.length > 0 ? pageContext.breadcrumb.join(' > ') : 'None'}
 
 **PAGE STATE:**
 ${formStateText}
 
-**VISIBLE INTERACTIVE ELEMENTS ON THIS PAGE:**
+**ALL VISIBLE INTERACTIVE ELEMENTS ON THIS PAGE (${pageContext.visibleButtons.length} total):**
 ${elementsList || 'No interactive elements found.'}
 
-**STEPS ALREADY COMPLETED:**
+**STEPS ALREADY COMPLETED (do NOT repeat these):**
 ${historyText}
 
 **YOUR TASK:**
-Based on the current page state and visible elements, provide the NEXT SINGLE ACTION to accomplish the user's goal.
-Remember: pick targetText from the actual visible elements listed above.
+Review the goal and ALL visible elements above. Pick the single BEST next action to accomplish the goal.
+If a direct link to the target service or action exists, use it.
 Respond with JSON only.`;
   }
 

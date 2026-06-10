@@ -40,6 +40,11 @@ router.post('/next-step', async (req: Request, res: Response) => {
     console.log('[Route /next-step] Visible elements:', pageContext.visibleButtons?.length || 0);
     console.log('[Route /next-step] History:', history?.length || 0, 'steps');
     console.log('[Route /next-step] Session:', sessionId || 'none');
+    // Log ALL elements sent to AI
+    console.log(`[Route /next-step] All ${(pageContext.visibleButtons || []).length} elements sent to AI:`);
+    (pageContext.visibleButtons || []).forEach((el: any, i: number) => {
+      console.log(`  ${i + 1}. [${el.tagName}] "${el.text || el.ariaLabel || '(no label)'}"`);
+    });
 
     const result = await aiService.generateNextStep({
       goal,

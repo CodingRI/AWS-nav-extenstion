@@ -134,6 +134,17 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 chrome.runtime.onInstalled.addListener((details) => {
   console.log('[Background] Extension installed:', details.reason);
   
+  // Enable session storage access for content scripts
+  if (chrome.storage?.session?.setAccessLevel) {
+    chrome.storage.session.setAccessLevel({
+      accessLevel: 'TRUSTED_AND_UNTRUSTED_CONTEXTS'
+    }).then(() => {
+      console.log('[Background] Session storage access level set to TRUSTED_AND_UNTRUSTED_CONTEXTS (onInstalled)');
+    }).catch(err => {
+      console.error('[Background] Failed to set session storage access level:', err);
+    });
+  }
+
   if (details.reason === 'install') {
     chrome.storage.local.set({
       settings: {
@@ -144,5 +155,16 @@ chrome.runtime.onInstalled.addListener((details) => {
   }
 });
 
+// Enable session storage access for content scripts on startup
+if (chrome.storage?.session?.setAccessLevel) {
+  chrome.storage.session.setAccessLevel({
+    accessLevel: 'TRUSTED_AND_UNTRUSTED_CONTEXTS'
+  }).then(() => {
+    console.log('[Background] Session storage access level set to TRUSTED_AND_UNTRUSTED_CONTEXTS (startup)');
+  }).catch(err => {
+    console.error('[Background] Failed to set session storage access level:', err);
+  });
+}
+
 // Log when service worker starts
-console.log('[Background] Service worker initialized (v2.1 - with tab tracking)');
+console.log('[Background] Service worker initialized (v2.2 - with session storage access)');
