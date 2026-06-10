@@ -2,7 +2,7 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
 
-console.log('[Content Script] AWS Navigation Assistant loaded');
+console.log('[Content Script] AWS Navigation Assistant v2 loaded');
 
 // Check if we're on an AWS console page
 const isAWSConsole = (): boolean => {
@@ -61,10 +61,11 @@ const initializeExtension = (): void => {
   document.body.appendChild(rootContainer);
 
   // Render React app
+  // Navigation watching is now handled inside App.tsx via navigationWatcher.ts
   const root = createRoot(rootContainer);
   root.render(<App />);
 
-  console.log('[Content Script] React app rendered');
+  console.log('[Content Script] React app rendered (v2 - context-aware)');
 };
 
 // Initialize when DOM is ready
@@ -74,31 +75,4 @@ if (document.readyState === 'loading') {
   initializeExtension();
 }
 
-// Handle SPA navigation (URL changes without page reload)
-// This is CRITICAL for AWS console navigation
-let lastUrl = location.href;
-const checkUrlChange = () => {
-  const currentUrl = location.href;
-  if (currentUrl !== lastUrl) {
-    lastUrl = currentUrl;
-    console.log('[Content Script] ✓ Page navigation detected:', currentUrl);
-    
-    // Notify app about page change
-    window.postMessage({
-      type: 'AWS_NAV_PAGE_CHANGED',
-      url: currentUrl,
-    }, '*');
-  }
-};
-
-// Check URL changes frequently
-setInterval(checkUrlChange, 500);
-
-// Also observe DOM mutations (catches route changes faster)
-new MutationObserver(checkUrlChange).observe(document, { 
-  subtree: true, 
-  childList: true 
-});
-
-// Export for use in other modules
 export {};
