@@ -48,11 +48,10 @@ app.get('/', (req: Request, res: Response) => {
     service: 'AWS Navigation Assistant Backend',
     version: '2.0.0',
     status: 'running',
-    mode: 'dynamic-step-generation',
+    mode: 'context-aware-single-step',
     endpoints: {
       health: '/api/health',
-      nextStep: '/api/next-step (POST) - NEW: Dynamic step-by-step',
-      navigate: '/api/navigate (POST) - LEGACY: All steps at once',
+      nextStep: '/api/next-step (POST) - Context-aware single step generation',
     },
   });
 });
@@ -79,18 +78,17 @@ app.use((req: Request, res: Response) => {
 // Start server
 app.listen(PORT, () => {
   console.log('='.repeat(60));
-  console.log('🚀 AWS Navigation Assistant Backend v2.0 (OpenRouter AI)');
+  console.log(' AWS Navigation Assistant Backend v2.0 (Context-Aware)');
   console.log('='.repeat(60));
   console.log(`✓ Server running on http://localhost:${PORT}`);
   console.log(`✓ Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(`✓ OpenRouter API Key configured: ${process.env.OPENROUTER_API_KEY ? 'Yes' : 'No'}`);
-  console.log(`✓ Mode: Dynamic step-by-step navigation`);
+  console.log(`✓ Mode: Context-aware single-step navigation`);
   console.log('='.repeat(60));
   console.log('\nEndpoints:');
   console.log(`  GET  /              - Service info`);
   console.log(`  GET  /api/health    - Health check`);
-  console.log(`  POST /api/next-step - Generate next step (NEW)`);
-  console.log(`  POST /api/navigate  - Generate all steps (LEGACY)`);
+  console.log(`  POST /api/next-step - Generate next step (context-aware)`);
   console.log('='.repeat(60));
 });
 

@@ -1,83 +1,130 @@
-// Message types for communication between components
-// Runtime-safe message constants
+// ============================================================
+// AWS Navigation Assistant — Shared Types (v2)
+// ============================================================
+
+// ----- Message Types (content script ↔ background ↔ backend) -----
+
 export const MessageType = {
-  GET_NAVIGATION_STEPS: "GET_NAVIGATION_STEPS",
+  // New dynamic flow
+  REQUEST_NEXT_STEP: "REQUEST_NEXT_STEP",
+  STEP_RESULT: "STEP_RESULT",
+  GRAB_CONTEXT: "GRAB_CONTEXT",
+  CONTEXT_RESULT: "CONTEXT_RESULT",
+
+  // Guidance lifecycle
+  PAUSE_GUIDANCE: "PAUSE_GUIDANCE",
+  RESUME_GUIDANCE: "RESUME_GUIDANCE",
+  STOP_GUIDANCE: "STOP_GUIDANCE",
+
+  // Legacy (kept for reference, will be removed in Chunk 3)
   HIGHLIGHT_ELEMENT: "HIGHLIGHT_ELEMENT",
-  NEXT_STEP: "NEXT_STEP",
   CLEAR_HIGHLIGHTS: "CLEAR_HIGHLIGHTS",
   PAGE_CHANGED: "PAGE_CHANGED",
   GUIDE_COMPLETED: "GUIDE_COMPLETED",
 } as const;
 
-// Type of all possible message values
 export type MessageTypeValue =
   (typeof MessageType)[keyof typeof MessageType];
 
-  
-  // Navigation step structure
-  export interface NavigationStep {
-    stepNumber: number;
-    instruction: string;
-    selector: string;
-    alternativeSelectors?: string[]; // Fallback selectors
-    textContent?: string; // For text-based matching
-    page: string; // Expected page URL pattern
-    waitForNavigation?: boolean;
-    scrollIntoView?: boolean;
-  }
-  
-  // API request/response types
-  export interface NavigationRequest {
-    query: string;
-    currentPage?: string;
-  }
-  
-  export interface NavigationResponse {
-    success: boolean;
-    steps: NavigationStep[];
-    summary: string;
-    estimatedTime?: string;
-    error?: string;
-  }
-  
-  // Extension message types
-  export interface ExtensionMessage {
-    type: MessageTypeValue;
-    payload?: any;
-  }
-  
-  export interface HighlightMessage extends ExtensionMessage {
-    type: typeof MessageType.HIGHLIGHT_ELEMENT;
-    payload: {
-      stepNumber: number;
-      selector: string;
-      alternativeSelectors?: string[];
-      textContent?: string;
-      instruction: string;
-    };
-  }
-  
-  export interface NavigationStepsMessage extends ExtensionMessage {
-    type: typeof MessageType.GET_NAVIGATION_STEPS;
-    payload: {
-      query: string;
-    };
-  }
-  
-  // Storage types
-  export interface SessionState {
-    query: string;
-    steps: NavigationStep[];
-    currentStep: number;
-    isActive: boolean;
-    startTime: number;
-  }
-  
-  // Highlight styles
-  export interface HighlightStyle {
-    outline?: string;
-    boxShadow?: string;
-    backgroundColor?: string;
-    zIndex?: number;
-    animation?: string;
-  }
+// ----- Page Context (Phase 1 output) -----
+
+/** A single interactive element found on the page */
+export interface InteractiveElement {
+  tagName: string;
+  text: string;
+  ariaLabel: string | null;
+  dataAnalytics: string | null;
+  role: string | null;
+  selector: string;        // best-effort CSS selector for this element
+  isVisible: boolean;
+}
+
+/** Full context of the current AWS Console page */
+export interface PageContext {
+  url: string;
+  service: string;         // e.g. "EC2", "S3", "IAM"
+  view: string;            // e.g. "Instances list", "Bucket details"
+  title: string;           // document.title
+  visibleButtons: InteractiveElement[];
+  breadcrumb: string[];
+  formState: Record<string, string>;  // open form fields, active tabs, etc.
+}
+
+// ----- Guidance Step (Phase 3 output — from LLM) -----
+
+export interface GuidanceStep {
+  instruction: string;     // human-readable: "Click the 'Create bucket' button"
+  targetSelector: string;  // ARIA label, text label, or CSS selector
+  targetText: string;      // visible text of the target element
+  waitFor: string;         // what should appear after clicking (for DOM settle)
+  stepIndex: number;       // 0-based, incremented by session manager
+  pageUrl?: string;        // URL where this step was issued
+  completedAt?: number;    // timestamp when user clicked the target
+}
+
+// ----- Guidance Session (persisted across SPA navigations) -----
+
+export type GuidanceStatus = "active" | "paused" | "completed" | "stopped";
+
+export interface GuidanceSession {
+  sessionId: string;
+  goal: string;
+  steps: GuidanceStep[];
+  currentStepIndex: number;
+  status: GuidanceStatus;
+  activeUrl: string;       // URL where guidance is currently active
+  pausedUrl?: string;      // URL where guidance was paused (for auto-resume)
+  pausedStepInstruction?: string; // instruction of the step that was active when paused
+  lastActivityTimestamp: number;
+  createdAt: number;
+}
+
+// ----- API Request / Response (content script → backend) -----
+
+export interface NextStepRequest {
+  goal: string;
+  pageContext: PageContext;
+  history: GuidanceStep[];
+  sessionId?: string;
+}
+
+export interface NextStepResponse {
+  success: boolean;
+  step: GuidanceStep;
+  isComplete: boolean;     // true when AI says the goal is done
+  message?: string;        // optional AI message (e.g. "Goal complete!")
+  error?: string;
+}
+
+// ----- Extension Messages (content script ↔ background) -----
+
+export interface ExtensionMessage {
+  type: MessageTypeValue;
+  payload?: any;
+}
+
+export interface NextStepMessage extends ExtensionMessage {
+  type: typeof MessageType.REQUEST_NEXT_STEP;
+  payload: NextStepRequest;
+}
+
+export interface StepResultMessage extends ExtensionMessage {
+  type: typeof MessageType.STEP_RESULT;
+  payload: NextStepResponse;
+}
+
+// ----- Storage Types -----
+
+export interface SessionStorage {
+  activeSession: GuidanceSession | null;
+}
+
+// ----- Highlight Styles (kept for reference) -----
+
+export interface HighlightStyle {
+  outline?: string;
+  boxShadow?: string;
+  backgroundColor?: string;
+  zIndex?: number;
+  animation?: string;
+}
