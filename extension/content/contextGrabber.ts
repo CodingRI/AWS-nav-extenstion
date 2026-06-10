@@ -1,12 +1,7 @@
-// ============================================================
-// Phase 1 — Context Grabber
-// Scans the current AWS Console page to build a PageContext
-// object that gets sent to the AI for step generation.
-// ============================================================
 
 import type { PageContext, InteractiveElement } from "@aws-nav/shared";
 
-// AWS service patterns extracted from URLs
+
 const SERVICE_PATTERNS: Record<string, string> = {
   "/ec2/": "EC2",
   "/s3/": "S3",
@@ -41,22 +36,21 @@ const SERVICE_PATTERNS: Record<string, string> = {
   "/console/home": "Console Home",
 };
 
-const MAX_INTERACTIVE_ELEMENTS = 50;
+// No hard cap — send everything visible to the AI
 
-/**
- * Master function — grabs full page context from the current DOM.
- * Runs Phase 1 of the architecture: URL parse + DOM scan + breadcrumb/form capture.
- */
+/* ============================================================
+   Master export
+   ============================================================ */
+
 export function grabPageContext(): PageContext {
   const url = window.location.href;
   const service = parseAWSService(url);
   const title = document.title;
-  const visibleButtons = scanInteractiveElements();
   const breadcrumb = captureBreadcrumb();
   const formState = captureFormState();
-
-  // Derive "view" from title + breadcrumb
   const view = deriveView(title, breadcrumb, url);
+
+  const visibleButtons = scanAndRankElements();
 
   const context: PageContext = {
     url,
@@ -68,128 +62,48 @@ export function grabPageContext(): PageContext {
     formState,
   };
 
-  console.log("[ContextGrabber] Page context captured:", {
-    service: context.service,
-    view: context.view,
-    elements: context.visibleButtons.length,
-    breadcrumb: context.breadcrumb,
+  console.log("[ContextGrabber] Captured context:", {
+    service,
+    view,
+    totalElements: visibleButtons.length,
+    top5: visibleButtons.slice(0, 5).map((e) => e.text || e.ariaLabel),
   });
 
   return context;
 }
 
-/**
- * Extract AWS service name from URL path.
- */
-export function parseAWSService(url: string): string {
-  try {
-    const pathname = new URL(url).pathname.toLowerCase();
 
-    for (const [pattern, name] of Object.entries(SERVICE_PATTERNS)) {
-      if (pathname.includes(pattern.toLowerCase())) {
-        return name;
-      }
-    }
 
-    // Fallback: try to extract from subdomain (e.g. s3.console.aws.amazon.com)
-    const hostname = new URL(url).hostname;
-    const subdomain = hostname.split(".")[0];
-    if (subdomain && subdomain !== "console" && subdomain !== "www") {
-      return subdomain.toUpperCase();
-    }
-
-    return "AWS Console";
-  } catch {
-    return "Unknown";
-  }
-}
-
-/**
- * Scan DOM for visible, interactive elements using STABLE selectors only.
- * Returns the top N elements sorted by likely importance.
- */
-export function scanInteractiveElements(): InteractiveElement[] {
-  const elements: InteractiveElement[] = [];
+function scanAndRankElements(): InteractiveElement[] {
+  const collected: InteractiveElement[] = [];
   const seen = new Set<Element>();
 
-  // Strategy 1: Elements with aria-label (most reliable on AWS)
-  collectElements(
-    document.querySelectorAll("[aria-label]"),
-    elements,
-    seen
+  // Grab all potentially interactive elements
+  const candidates = document.querySelectorAll(
+    'button, a[href], [role="button"], [role="link"], [role="tab"], ' +
+    '[role="menuitem"], [role="option"], input:not([type="hidden"]), ' +
+    'select, textarea'
   );
 
-  // Strategy 2: Elements with data-analytics metadata
-  collectElements(
-    document.querySelectorAll("[data-analytics-metadata]"),
-    elements,
-    seen
-  );
-
-  // Strategy 3: Role-based elements
-  collectElements(
-    document.querySelectorAll(
-      'button, a[href], [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="checkbox"], [role="radio"]'
-    ),
-    elements,
-    seen
-  );
-
-  // Strategy 4: Input elements and selects
-  collectElements(
-    document.querySelectorAll("input, select, textarea"),
-    elements,
-    seen
-  );
-
-  // Limit to top N
-  return elements.slice(0, MAX_INTERACTIVE_ELEMENTS);
-}
-
-/**
- * Collect elements from a NodeList into the results array,
- * deduplicating and filtering out invisible / extension-owned elements.
- */
-function collectElements(
-  nodeList: NodeListOf<Element>,
-  results: InteractiveElement[],
-  seen: Set<Element>
-): void {
-  for (const el of Array.from(nodeList)) {
+  for (const el of Array.from(candidates)) {
     if (seen.has(el)) continue;
-    if (results.length >= MAX_INTERACTIVE_ELEMENTS) break;
+    seen.add(el);
 
     const htmlEl = el as HTMLElement;
 
-    // Skip our own extension UI
+    // Hard filters — always skip
     if (isExtensionUI(htmlEl)) continue;
-
-    // Skip invisible elements
     if (!isVisible(htmlEl)) continue;
+    if (htmlEl.hasAttribute("disabled")) continue;
+    if (htmlEl.getAttribute("aria-disabled") === "true") continue;
+    if (htmlEl.getAttribute("aria-hidden") === "true") continue;
 
-    // Skip disabled elements
-    if (
-      htmlEl.hasAttribute("disabled") ||
-      htmlEl.getAttribute("aria-disabled") === "true"
-    ) {
-      continue;
-    }
+    const label = getLabel(htmlEl);
+    if (!label) continue; // No text = not useful to AI
 
-    seen.add(el);
-
-    const text = getVisibleText(htmlEl);
-    // Skip elements with no text or aria-label (not useful for AI)
-    if (
-      !text &&
-      !htmlEl.getAttribute("aria-label") &&
-      !htmlEl.getAttribute("data-analytics-metadata")
-    ) {
-      continue;
-    }
-
-    results.push({
+    collected.push({
       tagName: htmlEl.tagName.toLowerCase(),
-      text: text.substring(0, 100), // cap text length
+      text: label.substring(0, 80),
       ariaLabel: htmlEl.getAttribute("aria-label"),
       dataAnalytics: htmlEl.getAttribute("data-analytics-metadata"),
       role: htmlEl.getAttribute("role"),
@@ -197,79 +111,94 @@ function collectElements(
       isVisible: true,
     });
   }
+
+  console.log(
+    `[ContextGrabber] Found ${collected.length} visible elements. First 5:`,
+    collected.slice(0, 5).map((e) => e.text || e.ariaLabel)
+  );
+
+  return collected;
 }
 
+
 /**
- * Get visible text content of an element (direct text, not children's deep text).
- * Prefers: aria-label > title > direct textContent (trimmed, shallow).
+ * Get the most useful label for an element.
  */
-function getVisibleText(el: HTMLElement): string {
-  // Try aria-label first
-  const ariaLabel = el.getAttribute("aria-label");
-  if (ariaLabel) return ariaLabel.trim();
+function getLabel(el: HTMLElement): string {
+  // Prefer aria-label
+  const ariaLabel = (el.getAttribute("aria-label") || "").trim();
+  if (ariaLabel) return ariaLabel;
 
-  // Try title attribute
-  const title = el.getAttribute("title");
-  if (title) return title.trim();
+  // title attribute
+  const title = (el.getAttribute("title") || "").trim();
+  if (title) return title;
 
-  // Try placeholder for inputs
-  const placeholder = el.getAttribute("placeholder");
-  if (placeholder && el.tagName === "INPUT") return `[input: ${placeholder}]`;
+  // For inputs, use placeholder
+  if (el.tagName === "INPUT") {
+    const ph = (el.getAttribute("placeholder") || "").trim();
+    if (ph) return `[input: ${ph}]`;
+    const type = el.getAttribute("type") || "text";
+    return `[input type=${type}]`;
+  }
 
-  // Shallow text content (avoids pulling in nested elements' text)
-  const text = (el.textContent || "").trim();
-  return text.length > 100 ? text.substring(0, 100) + "…" : text;
+  // Direct text content — prefer shallow text to avoid pulling in children
+  const directText = Array.from(el.childNodes)
+    .filter((n) => n.nodeType === Node.TEXT_NODE)
+    .map((n) => (n.textContent || "").trim())
+    .join(" ")
+    .trim();
+  if (directText && directText.length <= 80) return directText;
+
+  // Full text content, capped
+  const fullText = (el.textContent || "").trim();
+  return fullText.substring(0, 80);
 }
 
-/**
- * Build the most stable CSS selector for an element.
- * Priority: [aria-label] > [data-testid] > [data-analytics-metadata] > id > tag+nth-child
- */
-function buildStableSelector(el: HTMLElement): string {
-  // aria-label
-  const ariaLabel = el.getAttribute("aria-label");
-  if (ariaLabel) {
-    return `[aria-label="${CSS.escape(ariaLabel)}"]`;
-  }
+/* ============================================================
+   Service / view parsing
+   ============================================================ */
 
-  // data-testid
-  const testId = el.getAttribute("data-testid");
-  if (testId) {
-    return `[data-testid="${CSS.escape(testId)}"]`;
+export function parseAWSService(url: string): string {
+  try {
+    const pathname = new URL(url).pathname.toLowerCase();
+    for (const [pattern, name] of Object.entries(SERVICE_PATTERNS)) {
+      if (pathname.includes(pattern.toLowerCase())) return name;
+    }
+    const hostname = new URL(url).hostname;
+    const subdomain = hostname.split(".")[0];
+    if (subdomain && subdomain !== "console" && subdomain !== "www") {
+      return subdomain.toUpperCase();
+    }
+    return "AWS Console";
+  } catch {
+    return "Unknown";
   }
-
-  // data-analytics-metadata
-  const analytics = el.getAttribute("data-analytics-metadata");
-  if (analytics) {
-    return `[data-analytics-metadata="${CSS.escape(analytics)}"]`;
-  }
-
-  // id
-  if (el.id) {
-    return `#${CSS.escape(el.id)}`;
-  }
-
-  // Fallback: tag + nth-of-type
-  const tag = el.tagName.toLowerCase();
-  const parent = el.parentElement;
-  if (parent) {
-    const siblings = Array.from(parent.children).filter(
-      (c) => c.tagName === el.tagName
-    );
-    const index = siblings.indexOf(el) + 1;
-    return `${tag}:nth-of-type(${index})`;
-  }
-
-  return tag;
 }
 
-/**
- * Capture breadcrumb navigation from AWS Console.
- */
+function deriveView(title: string, breadcrumb: string[], url: string): string {
+  if (breadcrumb.length > 1) return breadcrumb.slice(1).join(" > ");
+
+  const cleanTitle = title
+    .replace(/AWS\s*/i, "")
+    .replace(/Management Console/i, "")
+    .trim();
+  if (cleanTitle) return cleanTitle;
+
+  try {
+    const path = new URL(url).pathname;
+    const segments = path.split("/").filter(Boolean);
+    return segments.length > 1 ? segments.slice(1).join(" / ") : "Home";
+  } catch {
+    return "Unknown view";
+  }
+}
+
+/* ============================================================
+   Breadcrumb & form capture
+   ============================================================ */
+
 export function captureBreadcrumb(): string[] {
   const breadcrumbs: string[] = [];
-
-  // AWS Console uses various breadcrumb patterns
   const selectors = [
     '[data-testid="breadcrumb"] li',
     '[class*="breadcrumb"] li',
@@ -284,58 +213,36 @@ export function captureBreadcrumb(): string[] {
     if (items.length > 0) {
       items.forEach((item) => {
         const text = (item.textContent || "").trim();
-        if (text && text !== "/" && text !== ">") {
-          breadcrumbs.push(text);
-        }
+        if (text && text !== "/" && text !== ">") breadcrumbs.push(text);
       });
-      break; // Use the first matching pattern
+      break;
     }
   }
-
   return breadcrumbs;
 }
 
-/**
- * Capture form state — open modals, active tabs, form field values.
- */
 export function captureFormState(): Record<string, string> {
   const state: Record<string, string> = {};
 
-  // Active tab
-  const activeTab = document.querySelector(
-    '[role="tab"][aria-selected="true"]'
-  );
-  if (activeTab) {
-    state["activeTab"] = (activeTab.textContent || "").trim();
-  }
+  const activeTab = document.querySelector('[role="tab"][aria-selected="true"]');
+  if (activeTab) state["activeTab"] = (activeTab.textContent || "").trim();
 
-  // Open modal/dialog
   const modal = document.querySelector(
     '[role="dialog"]:not([aria-hidden="true"]), [role="alertdialog"]:not([aria-hidden="true"])'
   );
   if (modal) {
-    const modalTitle =
-      modal.querySelector("h1, h2, h3, [class*='title'], [class*='Title']");
+    const modalTitle = modal.querySelector("h1, h2, h3, [class*='title']");
     state["openModal"] = modalTitle
       ? (modalTitle.textContent || "").trim()
       : "Dialog open";
   }
 
-  // Open dropdown
-  const dropdown = document.querySelector(
-    '[role="listbox"]:not([aria-hidden="true"])'
-  );
-  if (dropdown) {
-    state["openDropdown"] = "true";
-  }
-
-  // Filled form fields (first 10)
   const inputs = document.querySelectorAll(
     'input[type="text"], input[type="search"], textarea'
   );
   let fieldCount = 0;
   inputs.forEach((input) => {
-    if (fieldCount >= 10) return;
+    if (fieldCount >= 5) return;
     const htmlInput = input as HTMLInputElement;
     if (htmlInput.value && !isExtensionUI(htmlInput)) {
       const label =
@@ -351,39 +258,37 @@ export function captureFormState(): Record<string, string> {
   return state;
 }
 
-/**
- * Derive the current "view" from title, breadcrumbs, and URL.
- */
-function deriveView(
-  title: string,
-  breadcrumb: string[],
-  url: string
-): string {
-  // Use breadcrumb if available
-  if (breadcrumb.length > 1) {
-    return breadcrumb.slice(1).join(" > ");
-  }
+/* ============================================================
+   Stable CSS selector builder
+   ============================================================ */
 
-  // Try to get view from title (remove "AWS" and service prefix)
-  const cleanTitle = title
-    .replace(/AWS\s*/i, "")
-    .replace(/Management Console/i, "")
-    .trim();
-  if (cleanTitle) {
-    return cleanTitle;
-  }
+function buildStableSelector(el: HTMLElement): string {
+  const ariaLabel = el.getAttribute("aria-label");
+  if (ariaLabel) return `[aria-label="${CSS.escape(ariaLabel)}"]`;
 
-  // Fallback: use URL path
-  try {
-    const path = new URL(url).pathname;
-    const segments = path.split("/").filter(Boolean);
-    return segments.length > 1 ? segments.slice(1).join(" / ") : "Home";
-  } catch {
-    return "Unknown view";
+  const testId = el.getAttribute("data-testid");
+  if (testId) return `[data-testid="${CSS.escape(testId)}"]`;
+
+  const analytics = el.getAttribute("data-analytics-metadata");
+  if (analytics) return `[data-analytics-metadata="${CSS.escape(analytics)}"]`;
+
+  if (el.id) return `#${CSS.escape(el.id)}`;
+
+  const tag = el.tagName.toLowerCase();
+  const parent = el.parentElement;
+  if (parent) {
+    const siblings = Array.from(parent.children).filter(
+      (c) => c.tagName === el.tagName
+    );
+    const index = siblings.indexOf(el) + 1;
+    return `${tag}:nth-of-type(${index})`;
   }
+  return tag;
 }
 
-// ---- Utility Functions ----
+/* ============================================================
+   Utilities
+   ============================================================ */
 
 function isExtensionUI(el: HTMLElement): boolean {
   let current: HTMLElement | null = el;
@@ -407,9 +312,7 @@ function isVisible(el: HTMLElement): boolean {
       style.display !== "none" &&
       style.visibility !== "hidden" &&
       style.opacity !== "0" &&
-      (el.offsetWidth > 0 ||
-        el.offsetHeight > 0 ||
-        el.getClientRects().length > 0)
+      (el.offsetWidth > 0 || el.offsetHeight > 0 || el.getClientRects().length > 0)
     );
   } catch {
     return false;

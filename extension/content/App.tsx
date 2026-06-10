@@ -1,27 +1,16 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { MessageSquare, X, Minimize2, Maximize2, Send, Loader2, CheckCircle2, Circle, Square, RefreshCw, AlertTriangle } from 'lucide-react';
-import type { GuidanceStep, GuidanceSession, NextStepRequest, NextStepResponse, PageContext } from "@aws-nav/shared";
+import type { GuidanceStep, GuidanceSession, NextStepRequest, NextStepResponse, PageContext, SessionMessage } from "@aws-nav/shared";
 import { highlighter } from './highlighter';
 import { grabPageContext } from './contextGrabber';
 import * as sessionManager from './sessionManager';
 import { watchForNavigation, waitForDomSettle, watchVisibility } from './navigationWatcher';
 import './App.css';
 
-interface Message {
-  id: string;
-  type: 'user' | 'assistant' | 'system' | 'error';
-  content: string;
-  timestamp: number;
-  retryAction?: 'retry-step' | 'retry-fresh';
-}
+type Message = SessionMessage;
 
-// Backend API URL
 const API_BASE_URL = 'http://localhost:3000';
-
-// How often to check for session expiry (every 30 seconds)
 const EXPIRY_CHECK_INTERVAL_MS = 30 * 1000;
-
-// Max retries for element-not-found before asking user
 const MAX_AUTO_RETRIES = 2;
 
 export const App: React.FC = () => {
@@ -31,14 +20,13 @@ export const App: React.FC = () => {
     {
       id: '1',
       type: 'assistant',
-      content: 'Hi! Ask me how to do something on AWS and I\'ll guide you step by step.',
+      content: "Hi! Tell me what you want to do on AWS and I'll guide you step by step.",
       timestamp: Date.now(),
     },
   ]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [session, setSession] = useState<GuidanceSession | null>(null);
-  const [currentStep, setCurrentStep] = useState<GuidanceStep | null>(null);
   const [retryCount, setRetryCount] = useState(0);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -46,6 +34,13 @@ export const App: React.FC = () => {
   const navCleanupRef = useRef<(() => void) | null>(null);
   const visCleanupRef = useRef<(() => void) | null>(null);
   const expiryTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Ref that always holds the LATEST requestNextStep function.
+  // This prevents stale closures in navigation callbacks and click handlers
+  // which are set up at mount time and would otherwise capture stale state.
+  const requestNextStepRef = useRef<(session: GuidanceSession, isRetry?: boolean) => Promise<void>>(
+    async () => { /* placeholder until first render */ }
+  );
 
   // Auto-scroll messages
   useEffect(() => {
@@ -59,55 +54,6 @@ export const App: React.FC = () => {
     }
   }, [isOpen, isMinimized]);
 
-  // On mount: check for existing session, start watchers, start expiry timer
-  useEffect(() => {
-    const init = async () => {
-      const existingSession = await sessionManager.getActiveSession();
-
-      if (existingSession) {
-        setSession(existingSession);
-
-        if (existingSession.status === 'active') {
-          console.log('[App] Resuming active session:', existingSession.sessionId);
-          addMessage('system', '🔄 Resuming previous guidance session...');
-          setIsOpen(true);
-          await waitForDomSettle();
-          await requestNextStep(existingSession);
-
-        } else if (existingSession.status === 'paused') {
-          console.log('[App] Found paused session:', existingSession.sessionId);
-          if (sessionManager.shouldAutoResume(existingSession, window.location.href)) {
-            console.log('[App] Back at paused URL, auto-resuming!');
-            addMessage('system', '🔄 Welcome back! Resuming guidance...');
-            setIsOpen(true);
-            const resumed = await sessionManager.resumeSession();
-            if (resumed) {
-              setSession(resumed);
-              await waitForDomSettle();
-              await requestNextStep(resumed);
-            }
-          } else {
-            addMessage('system', `⏸ Guidance paused. Navigate back or click Resume.`);
-            setIsOpen(true);
-          }
-        }
-      }
-    };
-
-    init();
-
-    navCleanupRef.current = watchForNavigation(handleUrlChange);
-    visCleanupRef.current = watchVisibility(handleVisibilityChange);
-    expiryTimerRef.current = setInterval(checkSessionExpiry, EXPIRY_CHECK_INTERVAL_MS);
-
-    return () => {
-      navCleanupRef.current?.();
-      visCleanupRef.current?.();
-      if (expiryTimerRef.current) clearInterval(expiryTimerRef.current);
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   const addMessage = useCallback((
     type: 'user' | 'assistant' | 'system' | 'error',
     content: string,
@@ -120,182 +66,240 @@ export const App: React.FC = () => {
       timestamp: Date.now(),
       retryAction,
     };
-    setMessages((prev) => [...prev, newMessage]);
+    setMessages((prev) => {
+      const updated = [...prev, newMessage];
+      sessionManager.updateSessionMessages(updated).catch((err) => {
+        console.warn('[App] Error saving messages to session:', err);
+      });
+      return updated;
+    });
   }, []);
 
   /* ========================================================================
-     SESSION EXPIRY CHECK
+     CLICK HANDLER ATTACHMENT
+     Guidance no longer pauses when user clicks elsewhere — they should be
+     free to interact naturally. Guidance only advances on the target click.
      ======================================================================== */
 
-  const checkSessionExpiry = async () => {
-    const currentSession = await sessionManager.getActiveSession();
-    if (!currentSession && session) {
-      console.log('[App] Session expired, cleaning up');
-      highlighter.clearHighlights();
-      setSession(null);
-      setCurrentStep(null);
-      setRetryCount(0);
-      addMessage('system', '⏰ Guidance session expired due to inactivity.');
-    }
-  };
-
-  /* ========================================================================
-     VISIBILITY CHANGE HANDLER (Tab Switch)
-     ======================================================================== */
-
-  const handleVisibilityChange = useCallback(async (isVisible: boolean) => {
-    if (!isVisible) {
-      console.log('[App] Tab hidden, session continues in background');
-      return;
-    }
-
-    console.log('[App] Tab visible again, checking session state...');
-
-    const currentSession = await sessionManager.getActiveSession();
-    if (!currentSession) {
-      if (session) {
-        highlighter.clearHighlights();
-        setSession(null);
-        setCurrentStep(null);
-        setRetryCount(0);
-        addMessage('system', '⏰ Guidance session expired while you were away.');
-      }
-      return;
-    }
-
-    setSession(currentSession);
-
-    if (currentSession.status === 'paused') {
-      if (sessionManager.shouldAutoResume(currentSession, window.location.href)) {
-        console.log('[App] Auto-resuming after tab switch');
-        addMessage('system', '🔄 Welcome back! Resuming guidance...');
-        const resumed = await sessionManager.resumeSession();
-        if (resumed) {
-          setSession(resumed);
-          await waitForDomSettle();
-          await requestNextStep(resumed);
-        }
-      }
-    } else if (currentSession.status === 'active') {
-      const pendingStep = sessionManager.getLastPendingStep(currentSession);
-      if (pendingStep) {
-        console.log('[App] Re-highlighting after tab return');
-        const el = await highlighter.highlightStep(pendingStep);
-        if (el) {
-          attachClickHandlers(el, currentSession);
-        }
-      }
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session]);
-
-  /* ========================================================================
-     URL CHANGE HANDLER (SPA Navigation)
-     ======================================================================== */
-
-  const handleUrlChange = useCallback(async (newUrl: string) => {
-    console.log('[App] URL changed to:', newUrl);
-
-    const currentSession = await sessionManager.getActiveSession();
-    if (!currentSession) return;
-
-    if (currentSession.status === 'active') {
-      await sessionManager.updateActiveUrl(newUrl);
-      await waitForDomSettle();
-
-      const updatedSession = await sessionManager.getActiveSession();
-      if (updatedSession && updatedSession.status === 'active') {
-        setSession(updatedSession);
-        setRetryCount(0); // Reset retry count on new page
-        await requestNextStep(updatedSession);
-      }
-
-    } else if (currentSession.status === 'paused') {
-      if (sessionManager.shouldAutoResume(currentSession, newUrl)) {
-        console.log('[App] User navigated back to paused URL, auto-resuming!');
-        addMessage('system', '🔄 Back at the guided page! Resuming...');
-
-        const resumed = await sessionManager.resumeSession();
-        if (resumed) {
-          await sessionManager.updateActiveUrl(newUrl);
-          setSession(resumed);
-          setRetryCount(0);
-          await waitForDomSettle();
-
-          const pendingStep = sessionManager.getLastPendingStep(resumed);
-          if (pendingStep) {
-            const el = await highlighter.highlightStep(pendingStep);
-            if (el) {
-              attachClickHandlers(el, resumed);
-            } else {
-              await requestNextStep(resumed);
-            }
-          } else {
-            await requestNextStep(resumed);
-          }
-        }
-      }
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  /* ========================================================================
-     CLICK HANDLER ATTACHMENT (extracted for reuse)
-     ======================================================================== */
-
-  const attachClickHandlers = (el: HTMLElement, activeSession: GuidanceSession) => {
+  const attachClickHandlers = useCallback((el: HTMLElement) => {
     highlighter.attachClickDetection(
       el,
       async () => {
         console.log('[App] Target clicked, advancing...');
         await sessionManager.completeCurrentStep();
-        setRetryCount(0); // Reset on successful click
+        setRetryCount(0);
 
+        // Wait a moment for AWS to navigate/update the DOM, then request next step
         setTimeout(async () => {
           const s = await sessionManager.getActiveSession();
           if (s && s.status === 'active') {
             setSession(s);
             await waitForDomSettle(600, 3000);
-            await requestNextStep(s);
+            // Always use ref so we get the latest function, not a stale closure
+            await requestNextStepRef.current(s);
           }
         }, 800);
-      },
-      async () => {
-        console.log('[App] Non-target click, pausing guidance');
-        await sessionManager.pauseSession('non-target-click');
-        const s = await sessionManager.getActiveSession();
-        setSession(s);
-        setCurrentStep(null);
-        setRetryCount(0);
-        addMessage('system', '⏸ Guidance paused — you clicked a different element. Navigate back to the guided page or click Resume to continue.');
       }
     );
-  };
+  }, []);
 
   /* ========================================================================
-     AI STEP REQUEST (with retry-with-re-context)
+     ON MOUNT: check existing session + start watchers
+     ======================================================================== */
+
+  useEffect(() => {
+    const init = async () => {
+      const existingSession = await sessionManager.getActiveSession();
+      if (existingSession) {
+        setSession(existingSession);
+
+        // Restore message history from the active session
+        if (existingSession.messages && existingSession.messages.length > 0) {
+          setMessages(existingSession.messages);
+        }
+
+        if (existingSession.status === 'active') {
+          console.log('[App] Resuming active session:', existingSession.sessionId);
+          setIsOpen(true);
+          
+          // Only add resume system message if it isn't already the last message
+          const lastMsg = existingSession.messages?.[existingSession.messages.length - 1];
+          if (!lastMsg || lastMsg.content !== 'Resuming previous guidance session...') {
+            addMessage('system', 'Resuming previous guidance session...');
+          }
+
+          await waitForDomSettle();
+          await requestNextStepRef.current(existingSession);
+
+        } else if (existingSession.status === 'paused') {
+          console.log('[App] Found paused session:', existingSession.sessionId);
+          if (sessionManager.shouldAutoResume(existingSession, window.location.href)) {
+            setIsOpen(true);
+
+            // Only add resume system message if it isn't already the last message
+            const lastMsg = existingSession.messages?.[existingSession.messages.length - 1];
+            if (!lastMsg || lastMsg.content !== 'Welcome back! Resuming guidance...') {
+              addMessage('system', 'Welcome back! Resuming guidance...');
+            }
+
+            const resumed = await sessionManager.resumeSession();
+            if (resumed) {
+              setSession(resumed);
+              await waitForDomSettle();
+              await requestNextStepRef.current(resumed);
+            }
+          } else {
+            const lastMsg = existingSession.messages?.[existingSession.messages.length - 1];
+            if (!lastMsg || lastMsg.content !== 'Guidance paused. Click Resume to continue.') {
+              addMessage('system', 'Guidance paused. Click Resume to continue.');
+            }
+            setIsOpen(true);
+          }
+        }
+      }
+    };
+
+    init();
+
+    // Navigation watcher — always calls via ref to avoid stale closures
+    navCleanupRef.current = watchForNavigation(async (newUrl: string) => {
+      console.log('[App] URL changed to:', newUrl);
+
+      const currentSession = await sessionManager.getActiveSession();
+      if (!currentSession) return;
+
+      if (currentSession.status === 'active') {
+        await sessionManager.updateActiveUrl(newUrl);
+        // Let the new page's DOM settle before grabbing context
+        await waitForDomSettle(800, 4000);
+
+        const updatedSession = await sessionManager.getActiveSession();
+        if (updatedSession && updatedSession.status === 'active') {
+          setSession(updatedSession);
+          setRetryCount(0);
+          console.log('[App] URL changed with active session, requesting next step');
+          await requestNextStepRef.current(updatedSession);
+        }
+      } else if (currentSession.status === 'paused') {
+        if (sessionManager.shouldAutoResume(currentSession, newUrl)) {
+          console.log('[App] User navigated back to paused URL, auto-resuming!');
+          addMessage('system', 'Back at the guided page! Resuming...');
+
+          const resumed = await sessionManager.resumeSession();
+          if (resumed) {
+            await sessionManager.updateActiveUrl(newUrl);
+            setSession(resumed);
+            setRetryCount(0);
+            await waitForDomSettle(800, 4000);
+
+            const pendingStep = sessionManager.getLastPendingStep(resumed);
+            if (pendingStep) {
+              const el = await highlighter.highlightStep(pendingStep);
+              if (el) {
+                attachClickHandlers(el);
+                return;
+              }
+            }
+            await requestNextStepRef.current(resumed);
+          }
+        }
+      }
+    });
+
+    visCleanupRef.current = watchVisibility(async (isVisible: boolean) => {
+      if (!isVisible) return;
+
+      console.log('[App] Tab visible again, checking session...');
+      const currentSession = await sessionManager.getActiveSession();
+
+      if (!currentSession) {
+        setSession(null);
+        highlighter.clearHighlights();
+        return;
+      }
+
+      setSession(currentSession);
+
+      if (currentSession.status === 'paused') {
+        if (sessionManager.shouldAutoResume(currentSession, window.location.href)) {
+          addMessage('system', 'Welcome back! Resuming...');
+          const resumed = await sessionManager.resumeSession();
+          if (resumed) {
+            setSession(resumed);
+            await waitForDomSettle();
+            await requestNextStepRef.current(resumed);
+          }
+        }
+      } else if (currentSession.status === 'active') {
+        const pendingStep = sessionManager.getLastPendingStep(currentSession);
+        if (pendingStep) {
+          const el = await highlighter.highlightStep(pendingStep);
+          if (el) attachClickHandlers(el);
+        }
+      }
+    });
+
+    expiryTimerRef.current = setInterval(async () => {
+      const currentSession = await sessionManager.getActiveSession();
+      if (!currentSession) {
+        setSession((prev) => {
+          if (prev) {
+            highlighter.clearHighlights();
+            setRetryCount(0);
+            addMessage('system', 'Guidance session expired due to inactivity.');
+          }
+          return null;
+        });
+      }
+    }, EXPIRY_CHECK_INTERVAL_MS);
+
+    return () => {
+      navCleanupRef.current?.();
+      visCleanupRef.current?.();
+      if (expiryTimerRef.current) clearInterval(expiryTimerRef.current);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /* ========================================================================
+     AI STEP REQUEST
      ======================================================================== */
 
   const requestNextStep = async (activeSession: GuidanceSession, isRetry = false) => {
     setIsLoading(true);
 
     try {
-      // Phase 1: Grab page context
+      let currentSession = activeSession;
+
+      // Self-heal race condition: Auto-complete previous pending step when advancing to the next one
+      if (!isRetry) {
+        const pendingStep = sessionManager.getLastPendingStep(currentSession);
+        if (pendingStep) {
+          console.log('[App] Auto-completing pending step:', pendingStep.instruction);
+          const updated = await sessionManager.completeCurrentStep();
+          if (updated) {
+            currentSession = updated;
+          }
+        }
+      }
+
+      // Phase 1: Grab prioritized page context
       const pageContext: PageContext = grabPageContext();
 
       console.log('[App] Requesting next step:', {
-        goal: activeSession.goal,
+        goal: currentSession.goal,
         service: pageContext.service,
-        stepsCompleted: activeSession.steps.length,
+        view: pageContext.view,
+        stepsCompleted: sessionManager.getCompletedSteps(currentSession).length,
         isRetry,
       });
 
       // Phase 2: Send to backend
       const request: NextStepRequest = {
-        goal: activeSession.goal,
+        goal: currentSession.goal,
         pageContext,
-        history: sessionManager.getCompletedSteps(activeSession),
-        sessionId: activeSession.sessionId,
+        history: sessionManager.getCompletedSteps(currentSession),
+        sessionId: currentSession.sessionId,
       };
 
       const response = await fetch(`${API_BASE_URL}/api/next-step`, {
@@ -317,58 +321,38 @@ export const App: React.FC = () => {
 
       // Phase 3: Check if goal is complete
       if (data.isComplete) {
-        addMessage('assistant', `🎉 ${data.message || 'Goal completed!'}`);
+        addMessage('assistant', data.message || 'Goal completed!');
         await sessionManager.completeSession();
         setSession(null);
-        setCurrentStep(null);
         setRetryCount(0);
         highlighter.clearHighlights();
         return;
       }
 
-      // Assign step index
+      // Build step
       const step: GuidanceStep = {
         ...data.step,
-        stepIndex: activeSession.steps.length,
+        stepIndex: currentSession.steps.length,
         pageUrl: window.location.href,
       };
-
-      // If this is a retry, remove the last pending step to replace it
-      if (isRetry) {
-        const lastStep = sessionManager.getLastPendingStep(activeSession);
-        if (lastStep) {
-          // Remove it by completing the session step list trim
-          activeSession.steps = activeSession.steps.filter(s => s.completedAt != null || s !== lastStep);
-        }
-      }
 
       // Add step to session
       const updatedSession = await sessionManager.addStep(step);
       setSession(updatedSession);
-      setCurrentStep(step);
-
-      if (!isRetry) {
-        addMessage('assistant', step.instruction);
-      } else {
-        addMessage('assistant', `🔄 ${step.instruction}`);
-      }
+      addMessage('assistant', step.instruction);
 
       // Phase 4: Find and highlight the element
       const el = await highlighter.highlightStep(step);
 
       if (!el) {
-        // Element not found — attempt auto-retry with fresh context
         const currentRetry = retryCount + 1;
         setRetryCount(currentRetry);
 
         if (currentRetry <= MAX_AUTO_RETRIES) {
           console.log(`[App] Element not found, auto-retrying (${currentRetry}/${MAX_AUTO_RETRIES})...`);
-          addMessage('system', `🔄 Element not found, re-analyzing page... (attempt ${currentRetry}/${MAX_AUTO_RETRIES})`);
+          addMessage('system', `Element not found, re-analyzing page... (attempt ${currentRetry}/${MAX_AUTO_RETRIES})`);
 
-          // Wait for DOM to potentially finish loading
           await waitForDomSettle(1000, 4000);
-
-          // Retry with fresh context
           const freshSession = await sessionManager.getActiveSession();
           if (freshSession && freshSession.status === 'active') {
             setIsLoading(false);
@@ -377,44 +361,37 @@ export const App: React.FC = () => {
           return;
         }
 
-        // Max retries exhausted — show error with Try Again button
         addMessage(
           'error',
-          `⚠️ Could not find the element "${step.targetText || 'target'}" on this page after ${MAX_AUTO_RETRIES} attempts.\n\nPossible reasons:\n• The element may require scrolling\n• A dialog or dropdown needs to open first\n• The page might still be loading`,
+          `Could not find "${step.targetText || 'the target element'}" on this page after ${MAX_AUTO_RETRIES} attempts.\n\nTry: scrolling down, opening a required dropdown first, or waiting for the page to load.`,
           'retry-step'
         );
         return;
       }
 
-      // Success! Reset retry count
+      // Success
       setRetryCount(0);
-
-      // Phase 5: Attach click detection
       if (updatedSession) {
-        attachClickHandlers(el, updatedSession);
+        attachClickHandlers(el);
       }
 
     } catch (err) {
       console.error('[App] Error requesting next step:', err);
       const errorMessage = err instanceof Error ? err.message : 'Unknown error';
 
-      if (errorMessage.includes('Failed to fetch') || errorMessage.includes('NetworkError')) {
-        addMessage(
-          'error',
-          `🔌 Cannot connect to the backend server.\n\nMake sure the server is running:\n  cd backend && npm run dev`,
-          'retry-fresh'
-        );
+      if (errorMessage.includes('Failed to fetch') || errorMessage.includes('NetworkError') || errorMessage.includes('ECONNREFUSED')) {
+        addMessage('error', 'Cannot connect to the backend server.\n\nRun: cd backend && npm run dev', 'retry-fresh');
       } else {
-        addMessage(
-          'error',
-          `❌ ${errorMessage}`,
-          'retry-fresh'
-        );
+        addMessage('error', errorMessage, 'retry-fresh');
       }
     } finally {
       setIsLoading(false);
     }
   };
+
+  // Keep the ref in sync with the latest requestNextStep function after every render
+  // This is the key fix for stale closures in navigation/click callbacks
+  requestNextStepRef.current = requestNextStep;
 
   /* ========================================================================
      RETRY HANDLERS
@@ -423,12 +400,11 @@ export const App: React.FC = () => {
   const handleRetryStep = async () => {
     const activeSession = await sessionManager.getActiveSession();
     if (!activeSession || activeSession.status !== 'active') {
-      addMessage('system', '⚠️ No active session to retry.');
+      addMessage('system', 'No active session to retry.');
       return;
     }
-
     setRetryCount(0);
-    addMessage('system', '🔄 Retrying with fresh page context...');
+    addMessage('system', 'Retrying with fresh page context...');
     await waitForDomSettle(500, 3000);
     await requestNextStep(activeSession, true);
   };
@@ -436,7 +412,7 @@ export const App: React.FC = () => {
   const handleRetryFresh = async () => {
     const activeSession = await sessionManager.getActiveSession();
     if (!activeSession) {
-      addMessage('system', '⚠️ No active session to retry.');
+      addMessage('system', 'No active session to retry.');
       return;
     }
 
@@ -448,7 +424,7 @@ export const App: React.FC = () => {
     if (s) {
       setRetryCount(0);
       setSession(s);
-      addMessage('system', '🔄 Retrying...');
+      addMessage('system', 'Retrying...');
       await requestNextStep(s);
     }
   };
@@ -461,7 +437,6 @@ export const App: React.FC = () => {
     if (!inputValue.trim() || isLoading) return;
 
     const userGoal = inputValue.trim();
-    addMessage('user', userGoal);
     setInputValue('');
 
     if (session) {
@@ -471,6 +446,19 @@ export const App: React.FC = () => {
 
     setRetryCount(0);
     const newSession = await sessionManager.createSession(userGoal, window.location.href);
+
+    // Initialize session message history with the user goal
+    const initialUserMessage: Message = {
+      id: Date.now().toString(),
+      type: 'user',
+      content: userGoal,
+      timestamp: Date.now(),
+    };
+    
+    setMessages([initialUserMessage]);
+    newSession.messages = [initialUserMessage];
+    await sessionManager.updateSessionMessages([initialUserMessage]);
+
     setSession(newSession);
     await requestNextStep(newSession);
   };
@@ -479,9 +467,8 @@ export const App: React.FC = () => {
     highlighter.clearHighlights();
     await sessionManager.stopSession();
     setSession(null);
-    setCurrentStep(null);
     setRetryCount(0);
-    addMessage('system', '🛑 Guidance stopped.');
+    addMessage('system', 'Guidance stopped.');
   };
 
   const handleResumeGuide = async () => {
@@ -489,13 +476,13 @@ export const App: React.FC = () => {
     if (resumed) {
       setSession(resumed);
       setRetryCount(0);
-      addMessage('system', '▶️ Resuming guidance...');
+      addMessage('system', 'Resuming guidance...');
 
       const pendingStep = sessionManager.getLastPendingStep(resumed);
       if (pendingStep) {
         const el = await highlighter.highlightStep(pendingStep);
         if (el) {
-          attachClickHandlers(el, resumed);
+          attachClickHandlers(el);
           return;
         }
       }
@@ -570,7 +557,6 @@ export const App: React.FC = () => {
                       )}
                       {message.content}
                     </div>
-                    {/* Retry button for error messages */}
                     {message.retryAction && (
                       <button
                         className="aws-nav-retry-button"
@@ -607,15 +593,13 @@ export const App: React.FC = () => {
               {completedSteps.length > 0 && (
                 <div className="aws-nav-step-progress">
                   <div className="aws-nav-step-progress-header">
-                    Progress ({completedSteps.length} steps completed)
+                    Progress ({completedSteps.length} step{completedSteps.length !== 1 ? 's' : ''} completed)
                   </div>
                   <div className="aws-nav-step-list">
                     {session?.steps.map((step, index) => (
                       <div
                         key={index}
-                        className={`aws-nav-step-item ${
-                          step.completedAt ? 'completed' : 'current'
-                        }`}
+                        className={`aws-nav-step-item ${step.completedAt ? 'completed' : 'current'}`}
                       >
                         <div className="aws-nav-step-icon">
                           {step.completedAt ? (
