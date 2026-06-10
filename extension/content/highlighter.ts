@@ -13,7 +13,7 @@ export class ElementHighlighter {
   private resizeObserver: ResizeObserver | null = null;
   private scrollListeners: Array<() => void> = [];
   private targetClickHandler: (() => void) | null = null;
-  private documentClickHandler: ((e: MouseEvent) => void) | null = null;
+
   private currentTargetElement: HTMLElement | null = null;
 
   /**
@@ -63,12 +63,14 @@ export class ElementHighlighter {
   /**
    * Attach click detection to the highlighted element.
    * - onTargetClick: called when user clicks the highlighted element
-   * - onOtherClick: called when user clicks somewhere else (not extension UI)
+   * NOTE: We no longer pause on non-target clicks — the user should be
+   * free to scroll, explore, and interact naturally. Guidance only
+   * advances when the correct element is clicked.
    */
   attachClickDetection(
     el: HTMLElement,
     onTargetClick: () => void,
-    onOtherClick: () => void
+    _onOtherClick?: () => void, // kept for API compatibility, no longer used
   ): void {
     // Clean up any previous handlers
     this.detachClickDetection();
@@ -76,37 +78,28 @@ export class ElementHighlighter {
     // Target element click (capture phase to catch before AWS prevents propagation)
     this.targetClickHandler = () => {
       console.log("[Highlighter] ✓ Target element clicked");
+      // Clear the overlay IMMEDIATELY — don't wait for async work
       this.clearHighlights();
       onTargetClick();
     };
+
     el.addEventListener("click", this.targetClickHandler, {
       once: true,
       capture: true,
     });
 
-    // Document-level click to detect "other" clicks
-    this.documentClickHandler = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-
-      // Ignore clicks on our own UI (overlay, extension panel)
-      if (this.isOwnUI(target)) return;
-
-      // Ignore clicks on the highlighted element (handled above)
-      if (el.contains(target) || target === el) return;
-
-      console.log("[Highlighter] ⚠ Click on non-target element");
-      this.clearHighlights();
-      onOtherClick();
-    };
-
-    // Use a small delay so the document handler doesn't fire on the same click that opened guidance
-    setTimeout(() => {
-      if (this.documentClickHandler) {
-        document.addEventListener("click", this.documentClickHandler, {
-          capture: true,
-        });
+    // Also listen on mousedown for faster visual response
+    const mousedownHandler = () => {
+      // Remove the visual overlay on mousedown so it feels instant
+      if (this.overlay) {
+        this.overlay.style.opacity = "0";
+        this.overlay.style.transition = "opacity 0.15s ease";
       }
-    }, 100);
+    };
+    el.addEventListener("mousedown", mousedownHandler, {
+      once: true,
+      capture: true,
+    });
   }
 
   /**
@@ -117,16 +110,11 @@ export class ElementHighlighter {
       this.currentTargetElement.removeEventListener(
         "click",
         this.targetClickHandler,
-        { capture: true } as EventListenerOptions
+        { capture: true } as EventListenerOptions,
       );
     }
-    if (this.documentClickHandler) {
-      document.removeEventListener("click", this.documentClickHandler, {
-        capture: true,
-      } as EventListenerOptions);
-    }
     this.targetClickHandler = null;
-    this.documentClickHandler = null;
+
   }
 
   /**
@@ -158,14 +146,12 @@ export class ElementHighlighter {
   private async findWithRetries(
     step: GuidanceStep,
     maxRetries: number,
-    delayMs: number
+    delayMs: number,
   ): Promise<HTMLElement | null> {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       const el = this.findElementSafely(step);
       if (el) {
-        console.log(
-          `[Highlighter] Found on attempt ${attempt}/${maxRetries}`
-        );
+        console.log(`[Highlighter] Found on attempt ${attempt}/${maxRetries}`);
         return el;
       }
 
@@ -176,124 +162,224 @@ export class ElementHighlighter {
     }
     return null;
   }
-
   /**
    * Waterfall element-finding strategy.
-   * Tries multiple strategies in order of reliability.
+   * Tries multiple strategies including Shadow DOM traversal for awsui-* components.
    */
   private findElementSafely(step: GuidanceStep): HTMLElement | null {
     const targetText = (step.targetText || "").trim();
     const targetSelector = (step.targetSelector || "").trim();
 
-    // Strategy 1: Exact aria-label match
+    if (!targetText && !targetSelector) return null;
+
+    // Strategy 1: Exact aria-label — main DOM then Shadow DOM
     if (targetText) {
       const el = this.findByAriaLabel(targetText, true);
-      if (el) {
-        this._lastFindStrategy = "exact-aria-label";
-        console.log("[Highlighter] ✓ Found via exact aria-label");
-        return el;
-      }
+      if (el) { this._lastFindStrategy = "exact-aria-label"; console.log("[Highlighter] ✓ Found via exact aria-label"); return el; }
+      const shadow = this.searchShadowByAttribute("aria-label", targetText, true);
+      if (shadow) { this._lastFindStrategy = "exact-aria-label-shadow"; console.log("[Highlighter] ✓ Found via exact aria-label (shadow DOM)"); return shadow; }
     }
 
-    // Strategy 2: Contains aria-label match
+    // Strategy 2: Exact collapsed-text match — main DOM then Shadow DOM
     if (targetText) {
-      const el = this.findByAriaLabel(targetText, false);
-      if (el) {
-        this._lastFindStrategy = "contains-aria-label";
-        console.log("[Highlighter] ✓ Found via contains aria-label");
-        return el;
-      }
+      const el = this.findByExactText(targetText);
+      if (el) { this._lastFindStrategy = "exact-text"; console.log("[Highlighter] ✓ Found via exact text"); return el; }
+      const shadow = this.searchShadowByText(targetText, true);
+      if (shadow) { this._lastFindStrategy = "exact-text-shadow"; console.log("[Highlighter] ✓ Found via exact text (shadow DOM)"); return shadow; }
     }
 
     // Strategy 3: data-analytics-metadata match
     if (targetText) {
       const el = this.findByDataAnalytics(targetText);
-      if (el) {
-        this._lastFindStrategy = "data-analytics";
-        console.log("[Highlighter] ✓ Found via data-analytics-metadata");
-        return el;
-      }
+      if (el) { this._lastFindStrategy = "data-analytics"; console.log("[Highlighter] ✓ Found via data-analytics-metadata"); return el; }
     }
 
-    // Strategy 4: Exact visible text match (case-insensitive)
+    // Strategy 4: Contains aria-label — main DOM then Shadow DOM
     if (targetText) {
-      const el = this.findByVisibleText(targetText, true);
-      if (el) {
-        this._lastFindStrategy = "exact-text";
-        console.log("[Highlighter] ✓ Found via exact text match");
-        return el;
-      }
+      const el = this.findByAriaLabel(targetText, false);
+      if (el) { this._lastFindStrategy = "contains-aria-label"; console.log("[Highlighter] ✓ Found via contains aria-label"); return el; }
+      const shadow = this.searchShadowByAttribute("aria-label", targetText, false);
+      if (shadow) { this._lastFindStrategy = "contains-aria-label-shadow"; console.log("[Highlighter] ✓ Found via contains aria-label (shadow DOM)"); return shadow; }
     }
 
-    // Strategy 5: Contains visible text match
+    // Strategy 5: Contains text in Shadow DOM
     if (targetText) {
-      const el = this.findByVisibleText(targetText, false);
-      if (el) {
-        this._lastFindStrategy = "contains-text";
-        console.log("[Highlighter] ✓ Found via contains text match");
-        return el;
-      }
+      const shadow = this.searchShadowByText(targetText, false);
+      if (shadow) { this._lastFindStrategy = "contains-text-shadow"; console.log("[Highlighter] ✓ Found via contains text (shadow DOM)"); return shadow; }
     }
 
-    // Strategy 6: Try targetSelector as-is (CSS selector fallback)
+    // Strategy 6: Scored text match (handles whitespace, sidebar penalty)
+    if (targetText) {
+      const el = this.findBestElementForText(targetText);
+      if (el) { this._lastFindStrategy = "scored-text"; console.log("[Highlighter] ✓ Found via scored text match"); return el; }
+    }
+
+    // Strategy 7: CSS selector fallback
     if (targetSelector) {
       const el = this.findByCSSSelector(targetSelector);
-      if (el) {
-        this._lastFindStrategy = "css-selector";
-        console.log("[Highlighter] ✓ Found via CSS selector fallback");
-        return el;
-      }
+      if (el) { this._lastFindStrategy = "css-selector"; console.log("[Highlighter] ✓ Found via CSS selector fallback"); return el; }
     }
 
-    // Strategy 7: Word-boundary matching (match individual key words)
+    // Strategy 8: Word-boundary matching
     if (targetText && targetText.length > 3) {
       const el = this.findByWordBoundary(targetText);
-      if (el) {
-        this._lastFindStrategy = "word-boundary";
-        console.log("[Highlighter] ✓ Found via word-boundary match");
-        return el;
-      }
+      if (el) { this._lastFindStrategy = "word-boundary"; console.log("[Highlighter] ✓ Found via word-boundary match"); return el; }
     }
 
-    // Strategy 8: Fuzzy text matching (Levenshtein distance ≤ 3)
+    // Strategy 9: Fuzzy text matching (Levenshtein distance ≤ 3)
     if (targetText && targetText.length > 3) {
       const el = this.findByFuzzyText(targetText, 3);
-      if (el) {
-        this._lastFindStrategy = "fuzzy-text";
-        console.log("[Highlighter] ✓ Found via fuzzy text match");
-        return el;
-      }
+      if (el) { this._lastFindStrategy = "fuzzy-text"; console.log("[Highlighter] ✓ Found via fuzzy text match"); return el; }
     }
 
     this._lastFindStrategy = "none";
     return null;
   }
 
+  /* ========================================================================
+     SHADOW DOM TRAVERSAL (for awsui-* web components)
+     AWS Console embeds most buttons/links in shadow roots — standard
+     querySelectorAll() cannot see them at all.
+     ======================================================================== */
+
   /**
-   * Find by aria-label attribute.
+   * Search all shadow roots on the page for an element matching an attribute.
    */
-  private findByAriaLabel(
-    text: string,
-    exact: boolean
+  private searchShadowByAttribute(
+    attribute: string,
+    value: string,
+    exact: boolean,
   ): HTMLElement | null {
+    const normalized = value.toLowerCase().trim();
+
+    const searchRoot = (root: Document | ShadowRoot): HTMLElement | null => {
+      const elements = root.querySelectorAll(`[${attribute}]`);
+      for (const el of Array.from(elements)) {
+        const htmlEl = el as HTMLElement;
+        const attrVal = (htmlEl.getAttribute(attribute) || "").toLowerCase().trim();
+        const matches = exact
+          ? attrVal === normalized
+          : attrVal.includes(normalized) || normalized.includes(attrVal);
+        if (matches && this.isValidTarget(htmlEl) && !this.isInSideNav(htmlEl)) {
+          return htmlEl;
+        }
+      }
+      return null;
+    };
+
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+    let node = walker.nextNode();
+    while (node) {
+      const el = node as Element;
+      if (el.shadowRoot) {
+        const found = searchRoot(el.shadowRoot);
+        if (found) return found;
+      }
+      node = walker.nextNode();
+    }
+    return null;
+  }
+
+  /**
+   * Search all shadow roots for an element with matching text content.
+   */
+  private searchShadowByText(text: string, exact: boolean): HTMLElement | null {
+    const normalized = text.toLowerCase().trim();
+    const selectors = [
+      "button", "a", 'div[role="button"]', 'span[role="button"]',
+      "awsui-button", "awsui-link",
+    ];
+
+    const searchRoot = (root: Document | ShadowRoot): HTMLElement | null => {
+      for (const selector of selectors) {
+        const elements = root.querySelectorAll(selector);
+        for (const el of Array.from(elements)) {
+          const htmlEl = el as HTMLElement;
+          if (!this.isValidTarget(htmlEl)) continue;
+          const elText = (htmlEl.textContent || "")
+            .replace(/\s+/g, " ")
+            .trim()
+            .toLowerCase();
+          const matches = exact ? elText === normalized : elText.includes(normalized);
+          if (matches && !this.isInSideNav(htmlEl)) return htmlEl;
+        }
+      }
+      return null;
+    };
+
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+    let node = walker.nextNode();
+    while (node) {
+      const el = node as Element;
+      if (el.shadowRoot) {
+        const found = searchRoot(el.shadowRoot);
+        if (found) return found;
+      }
+      node = walker.nextNode();
+    }
+    return null;
+  }
+
+  /**
+   * Exact collapsed-text search in the main DOM.
+   * Collapses all whitespace (AWS wraps button text in many nested spans).
+   */
+  private findByExactText(text: string): HTMLElement | null {
+    const normalized = text.toLowerCase().trim();
+    const selectors = [
+      "button", "a",
+      'div[role="button"]', 'span[role="button"]',
+      '[role="link"]', '[role="tab"]', '[role="menuitem"]',
+    ];
+
+    let sidebarMatch: HTMLElement | null = null;
+
+    for (const selector of selectors) {
+      for (const el of Array.from(document.querySelectorAll(selector))) {
+        const htmlEl = el as HTMLElement;
+        if (!this.isValidTarget(htmlEl)) continue;
+        const elText = (htmlEl.textContent || "")
+          .replace(/\s+/g, " ")
+          .trim()
+          .toLowerCase();
+        if (elText === normalized) {
+          if (this.isInSideNav(htmlEl)) {
+            if (!sidebarMatch) sidebarMatch = htmlEl;
+          } else {
+            return htmlEl;
+          }
+        }
+      }
+    }
+    return sidebarMatch;
+  }
+
+  /**
+   * Find by aria-label attribute (main DOM, sidebar-aware).
+   */
+  private findByAriaLabel(text: string, exact: boolean): HTMLElement | null {
     const normalized = text.toLowerCase().trim();
     const allElements = document.querySelectorAll("[aria-label]");
 
+    let sidebarMatch: HTMLElement | null = null;
+
     for (const el of Array.from(allElements)) {
       const htmlEl = el as HTMLElement;
-      const label = (htmlEl.getAttribute("aria-label") || "")
-        .toLowerCase()
-        .trim();
+      const label = (htmlEl.getAttribute("aria-label") || "").toLowerCase().trim();
 
       const matches = exact
         ? label === normalized
         : label.includes(normalized) || normalized.includes(label);
 
       if (matches && this.isValidTarget(htmlEl)) {
-        return htmlEl;
+        if (this.isInSideNav(htmlEl)) {
+          if (!sidebarMatch) sidebarMatch = htmlEl;
+        } else {
+          return htmlEl;
+        }
       }
     }
-    return null;
+    return sidebarMatch;
   }
 
   /**
@@ -301,17 +387,11 @@ export class ElementHighlighter {
    */
   private findByDataAnalytics(text: string): HTMLElement | null {
     const normalized = text.toLowerCase().trim();
-    const allElements = document.querySelectorAll(
-      "[data-analytics-metadata]"
-    );
+    const allElements = document.querySelectorAll("[data-analytics-metadata]");
 
     for (const el of Array.from(allElements)) {
       const htmlEl = el as HTMLElement;
-      const metadata = (
-        htmlEl.getAttribute("data-analytics-metadata") || ""
-      )
-        .toLowerCase()
-        .trim();
+      const metadata = (htmlEl.getAttribute("data-analytics-metadata") || "").toLowerCase().trim();
 
       if (metadata.includes(normalized) && this.isValidTarget(htmlEl)) {
         return htmlEl;
@@ -319,78 +399,104 @@ export class ElementHighlighter {
     }
     return null;
   }
-
-  /**
-   * Find by visible text content.
-   */
-  private findByVisibleText(
-    text: string,
-    exact: boolean
-  ): HTMLElement | null {
+  private findBestElementForText(text: string): HTMLElement | null {
     const normalized = text.toLowerCase().trim();
 
-    // Search interactive elements first, then all visible elements
-    const selectors = [
-      "button",
-      "a",
-      '[role="button"]',
-      '[role="link"]',
-      '[role="tab"]',
-      '[role="menuitem"]',
-      "input[type='submit']",
-      "span",
-      "div",
-    ];
+    /**
+     * Get the clean, collapsed text label of an element.
+     * AWS wraps button text in nested <span>s with lots of whitespace —
+     * we need to collapse that to a single trimmed string.
+     */
+    const cleanText = (el: HTMLElement): string => {
+      // Prefer aria-label as the most authoritative identifier
+      const aria = (el.getAttribute("aria-label") || "").trim();
+      if (aria) return aria.toLowerCase();
+      // Collapse all nested text content (whitespace-normalised)
+      return (el.textContent || "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .toLowerCase();
+    };
 
-    for (const selector of selectors) {
-      const elements = document.querySelectorAll(selector);
-      for (const el of Array.from(elements)) {
-        const htmlEl = el as HTMLElement;
-        const elText = (htmlEl.textContent || "").trim().toLowerCase();
+    interface Candidate { el: HTMLElement; score: number; }
+    const candidates: Candidate[] = [];
 
-        // For exact: text must match completely
-        // For contains: either side can contain the other
-        const matches = exact
-          ? elText === normalized
-          : elText.includes(normalized) ||
-            (normalized.length > 3 && normalized.includes(elText) && elText.length > 2);
+    const allInteractive = document.querySelectorAll(
+      'button, a[href], [role="button"], [role="link"], [role="tab"], [role="menuitem"]'
+    );
 
-        if (matches && this.isValidTarget(htmlEl)) {
-          // Prefer the most specific (deepest) matching element
-          // Find the deepest child that still contains the text
-          const deepest = this.findDeepestMatch(htmlEl, normalized, exact);
-          return deepest || htmlEl;
-        }
+    for (const el of Array.from(allInteractive)) {
+      const htmlEl = el as HTMLElement;
+      if (!this.isValidTarget(htmlEl)) continue;
+
+      const label = cleanText(htmlEl);
+
+      // Must contain the target text, or target text must contain label
+      const hasExact = label === normalized;
+      const hasContains = label.includes(normalized);
+      const targetInLabel = normalized.includes(label) && label.length > 2;
+
+      if (!hasExact && !hasContains && !targetInLabel) continue;
+
+      // Reject if text is way longer than target AND it's not an exact match
+      // (8x allows for buttons with badges like "Instances (12)")
+      if (!hasExact && label.length > normalized.length * 8) continue;
+
+      let score = 0;
+
+      if (hasExact) score += 100;
+      else if (hasContains) score += 50;
+      else if (targetInLabel) score += 30;
+
+      // aria-label match is more reliable than text match
+      if (el.getAttribute("aria-label")) {
+        const ariaLower = el.getAttribute("aria-label")!.toLowerCase();
+        if (ariaLower === normalized) score += 60;
+        else if (ariaLower.includes(normalized)) score += 30;
       }
+
+      // Prefer real interactive elements
+      const tag = htmlEl.tagName.toLowerCase();
+      if (tag === "button") score += 30;
+      if (tag === "a") score += 15;
+      const role = htmlEl.getAttribute("role") || "";
+      if (role === "button") score += 25;
+      if (role === "tab") score += 15;
+
+      // Shorter text = more specific (not a container with lots of nested text)
+      const lengthPenalty = Math.max(0, label.length - normalized.length);
+      score -= Math.min(50, lengthPenalty * 2);
+
+      // Penalise containers that have interactive children inside them
+      const interactiveChildren = htmlEl.querySelectorAll(
+        'button, a, input, [role="button"]'
+      ).length;
+      score -= interactiveChildren * 20;
+
+      // Prefer main content over sidebar
+      if (!this.isInSideNav(htmlEl)) score += 20;
+      // Extra penalty for sidebar elements when main-content match exists
+      if (this.isInSideNav(htmlEl)) score -= 40;
+
+      candidates.push({ el: htmlEl, score });
     }
 
-    return null;
+    if (candidates.length === 0) return null;
+
+    candidates.sort((a, b) => b.score - a.score);
+    console.log(
+      "[Highlighter] Scored candidates for", JSON.stringify(text), ":",
+      candidates.slice(0, 5).map((c) => ({
+        label: (cleanText(c.el)).substring(0, 40),
+        tag: c.el.tagName,
+        score: c.score,
+      }))
+    );
+
+    return candidates[0]!.el;
   }
 
-  /**
-   * Find the deepest child element that matches the target text.
-   * This avoids highlighting a giant container when a specific button matches.
-   */
-  private findDeepestMatch(
-    parent: HTMLElement,
-    normalizedText: string,
-    exact: boolean
-  ): HTMLElement | null {
-    const children = parent.querySelectorAll("button, a, span, [role='button']");
-    for (const child of Array.from(children)) {
-      const htmlChild = child as HTMLElement;
-      const childText = (htmlChild.textContent || "").trim().toLowerCase();
 
-      const matches = exact
-        ? childText === normalizedText
-        : childText.includes(normalizedText);
-
-      if (matches && this.isValidTarget(htmlChild)) {
-        return htmlChild;
-      }
-    }
-    return null;
-  }
 
   /**
    * Try a CSS selector directly.
@@ -413,12 +519,20 @@ export class ElementHighlighter {
    * if enough key words overlap.
    */
   private findByWordBoundary(text: string): HTMLElement | null {
-    const words = text.toLowerCase().trim().split(/\s+/).filter(w => w.length > 2);
+    const words = text
+      .toLowerCase()
+      .trim()
+      .split(/\s+/)
+      .filter((w) => w.length > 2);
     if (words.length === 0) return null;
 
     const interactiveSelectors = [
-      "button", "a", '[role="button"]', '[role="link"]',
-      '[role="tab"]', '[role="menuitem"]',
+      "button",
+      "a",
+      '[role="button"]',
+      '[role="link"]',
+      '[role="tab"]',
+      '[role="menuitem"]',
     ];
 
     let bestMatch: HTMLElement | null = null;
@@ -456,13 +570,20 @@ export class ElementHighlighter {
    * Finds the interactive element whose text is closest to the target,
    * within the specified max distance.
    */
-  private findByFuzzyText(text: string, maxDistance: number): HTMLElement | null {
+  private findByFuzzyText(
+    text: string,
+    maxDistance: number,
+  ): HTMLElement | null {
     const normalized = text.toLowerCase().trim();
     if (normalized.length < 3) return null;
 
     const interactiveSelectors = [
-      "button", "a", '[role="button"]', '[role="link"]',
-      '[role="tab"]', '[role="menuitem"]',
+      "button",
+      "a",
+      '[role="button"]',
+      '[role="link"]',
+      '[role="tab"]',
+      '[role="menuitem"]',
     ];
 
     let bestMatch: HTMLElement | null = null;
@@ -517,9 +638,9 @@ export class ElementHighlighter {
       for (let j = 1; j <= b.length; j++) {
         const cost = a[i - 1] === b[j - 1] ? 0 : 1;
         matrix[i]![j] = Math.min(
-          matrix[i - 1]![j]! + 1,        // deletion
-          matrix[i]![j - 1]! + 1,        // insertion
-          matrix[i - 1]![j - 1]! + cost  // substitution
+          matrix[i - 1]![j]! + 1, // deletion
+          matrix[i]![j - 1]! + 1, // insertion
+          matrix[i - 1]![j - 1]! + cost, // substitution
         );
         rowMin = Math.min(rowMin, matrix[i]![j]!);
       }
@@ -543,8 +664,10 @@ export class ElementHighlighter {
     while (current && current !== document.body) {
       const style = window.getComputedStyle(current);
       const isScrollable =
-        (style.overflow === "auto" || style.overflow === "scroll" ||
-         style.overflowY === "auto" || style.overflowY === "scroll") &&
+        (style.overflow === "auto" ||
+          style.overflow === "scroll" ||
+          style.overflowY === "auto" ||
+          style.overflowY === "scroll") &&
         current.scrollHeight > current.clientHeight;
 
       if (isScrollable) {
@@ -552,7 +675,10 @@ export class ElementHighlighter {
         const containerRect = current.getBoundingClientRect();
         const elRect = el.getBoundingClientRect();
 
-        if (elRect.bottom > containerRect.bottom || elRect.top < containerRect.top) {
+        if (
+          elRect.bottom > containerRect.bottom ||
+          elRect.top < containerRect.top
+        ) {
           el.scrollIntoView({ behavior: "smooth", block: "center" });
           await new Promise((r) => setTimeout(r, 300));
         }
@@ -561,7 +687,11 @@ export class ElementHighlighter {
     }
 
     // Then scroll the main viewport
-    el.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
+    el.scrollIntoView({
+      behavior: "smooth",
+      block: "center",
+      inline: "center",
+    });
     await new Promise((r) => setTimeout(r, 400));
   }
 
@@ -579,7 +709,41 @@ export class ElementHighlighter {
     ) {
       return false;
     }
+    // Don't highlight navigation utility controls
+    const label = (el.getAttribute("aria-label") || el.textContent || "").toLowerCase().trim();
+    if (/^(open|close|toggle|expand|collapse)\s+(navigation|nav|sidebar|drawer|menu)/i.test(label)) {
+      return false;
+    }
     return true;
+  }
+
+  /**
+   * Check if element is inside a nav/sidebar container.
+   * Used to prefer main-content matches over sidebar matches.
+   */
+  private isInSideNav(el: HTMLElement): boolean {
+    let current: HTMLElement | null = el.parentElement;
+    let depth = 0;
+    while (current && current !== document.body && depth < 12) {
+      const tag = current.tagName.toLowerCase();
+      const role = current.getAttribute("role") || "";
+      const id = (current.id || "").toLowerCase();
+      const cls = (current.className || "").toLowerCase();
+      if (
+        tag === "nav" ||
+        tag === "aside" ||
+        role === "navigation" ||
+        id.includes("sidebar") ||
+        id.includes("side-nav") ||
+        cls.includes("sidebar") ||
+        cls.includes("side-nav")
+      ) {
+        return true;
+      }
+      current = current.parentElement;
+      depth++;
+    }
+    return false;
   }
 
   private isOwnUI(el: HTMLElement): boolean {
@@ -741,7 +905,9 @@ export class ElementHighlighter {
     });
     window.addEventListener("resize", scrollHandler, { passive: true });
     this.scrollListeners.push(() => {
-      window.removeEventListener("scroll", scrollHandler, { capture: true } as EventListenerOptions);
+      window.removeEventListener("scroll", scrollHandler, {
+        capture: true,
+      } as EventListenerOptions);
       window.removeEventListener("resize", scrollHandler);
     });
 
@@ -776,6 +942,8 @@ export class ElementHighlighter {
     `;
     document.head.appendChild(style);
   }
+
+  
 }
 
 export const highlighter = new ElementHighlighter();

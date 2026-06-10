@@ -64,6 +64,14 @@ export interface GuidanceStep {
 
 // ----- Guidance Session (persisted across SPA navigations) -----
 
+export interface SessionMessage {
+  id: string;
+  type: 'user' | 'assistant' | 'system' | 'error';
+  content: string;
+  timestamp: number;
+  retryAction?: 'retry-step' | 'retry-fresh';
+}
+
 export type GuidanceStatus = "active" | "paused" | "completed" | "stopped";
 
 export interface GuidanceSession {
@@ -77,6 +85,7 @@ export interface GuidanceSession {
   pausedStepInstruction?: string; // instruction of the step that was active when paused
   lastActivityTimestamp: number;
   createdAt: number;
+  messages?: SessionMessage[];
 }
 
 // ----- API Request / Response (content script → backend) -----

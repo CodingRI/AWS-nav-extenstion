@@ -4,10 +4,23 @@
 // chrome.storage.session. Handles create/pause/resume/stop.
 // ============================================================
 
-import type { GuidanceSession, GuidanceStep, GuidanceStatus } from "@aws-nav/shared";
+import type { GuidanceSession, GuidanceStep, GuidanceStatus, SessionMessage } from "@aws-nav/shared";
 
 const SESSION_KEY = "aws_nav_active_session";
 const SESSION_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Check if the extension context is still valid.
+ * When an extension is reloaded, old content script instances
+ * lose their runtime context and chrome.storage calls throw.
+ */
+function isContextValid(): boolean {
+  try {
+    return !!chrome?.runtime?.id;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Generate a unique session ID.
@@ -40,8 +53,10 @@ export async function createSession(goal: string, startUrl: string): Promise<Gui
  * Get the currently active session. Returns null if none exists or if expired.
  */
 export async function getActiveSession(): Promise<GuidanceSession | null> {
+  if (!isContextValid()) return null;
   try {
     const result = await chrome.storage.session.get(SESSION_KEY);
+
     const session = result[SESSION_KEY] as GuidanceSession | undefined;
 
     if (!session) return null;
@@ -54,7 +69,17 @@ export async function getActiveSession(): Promise<GuidanceSession | null> {
     }
 
     return session;
-  } catch (err) {
+  } catch (err: any) {
+    // Silently ignore context invalidation — happens when extension is reloaded
+    // and old content script instances are still running
+    const msg = err?.message || "";
+    if (
+      msg.includes("Extension context invalidated") ||
+      msg.includes("not allowed from this context") ||
+      msg.includes("Cannot access")
+    ) {
+      return null; // silent — this is expected
+    }
     console.warn("[SessionManager] Error reading session:", err);
     return null;
   }
@@ -251,12 +276,28 @@ export async function checkAndHandleExpiry(): Promise<boolean> {
   return false;
 }
 
+/**
+ * Update the session's message list.
+ */
+export async function updateSessionMessages(messages: SessionMessage[]): Promise<GuidanceSession | null> {
+  const session = await getActiveSession();
+  if (!session) return null;
+
+  session.messages = messages;
+  session.lastActivityTimestamp = Date.now();
+
+  await saveSession(session);
+  return session;
+}
+
 // ---- Internal ----
 
 async function saveSession(session: GuidanceSession): Promise<void> {
+  if (!isContextValid()) return; // extension was reloaded, context gone
   try {
     await chrome.storage.session.set({ [SESSION_KEY]: session });
   } catch (err) {
-    console.error("[SessionManager] Error saving session:", err);
+    console.warn("[SessionManager] Error saving session:", err);
   }
 }
+
