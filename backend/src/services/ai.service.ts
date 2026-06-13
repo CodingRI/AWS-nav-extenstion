@@ -5,39 +5,27 @@ import type {
   GuidanceStep,
 } from "@aws-nav/shared";
 
-const OPENROUTER_API_URL =
-  "https://openrouter.ai/api/v1/chat/completions";
+const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
 
-const OPENROUTER_API_KEY =
-  process.env.OPENROUTER_API_KEY;
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 
 if (!OPENROUTER_API_KEY) {
   throw new Error("OPENROUTER_API_KEY is missing");
 }
 
 export class AIService {
-  async generateNextStep(
-    request: NextStepRequest,
-  ): Promise<NextStepResponse> {
+  async generateNextStep(request: NextStepRequest): Promise<NextStepResponse> {
     const prompt = this.buildContextAwarePrompt(request);
 
     try {
-      console.log(
-        "[AIService] Requesting next step from OpenRouter...",
-      );
+      console.log("[AIService] Requesting next step from OpenRouter...");
       console.log("[AIService] Goal:", request.goal);
-      console.log(
-        "[AIService] Service:",
-        request.pageContext.service,
-      );
+      console.log("[AIService] Service:", request.pageContext.service);
       console.log(
         "[AIService] Visible elements:",
         request.pageContext.visibleButtons.length,
       );
-      console.log(
-        "[AIService] History steps:",
-        request.history.length,
-      );
+      console.log("[AIService] History steps:", request.history.length);
 
       const response = await axios.post(
         OPENROUTER_API_URL,
@@ -64,27 +52,17 @@ export class AIService {
             Authorization: `Bearer ${OPENROUTER_API_KEY}`,
             "Content-Type": "application/json",
             "HTTP-Referer":
-              process.env.OPENROUTER_SITE_URL ??
-              "http://localhost:3000",
-            "X-Title":
-              process.env.OPENROUTER_SITE_NAME ??
-              "AWS Navigator",
+              process.env.OPENROUTER_SITE_URL ?? "http://localhost:3000",
+            "X-Title": process.env.OPENROUTER_SITE_NAME ?? "AWS Navigator",
           },
         },
       );
 
-      const responseText =
-        response.data.choices?.[0]?.message?.content ?? "";
+      const responseText = response.data.choices?.[0]?.message?.content ?? "";
 
-      console.log(
-        "[AIService] Raw response:",
-        responseText,
-      );
+      console.log("[AIService] Raw response:", responseText);
 
-      return this.parseStructuredResponse(
-        responseText,
-        request,
-      );
+      return this.parseStructuredResponse(responseText, request);
     } catch (error: any) {
       console.error(
         "[AIService] OpenRouter Error:",
@@ -95,8 +73,7 @@ export class AIService {
         success: false,
         step: this.getFallbackStep(request),
         isComplete: false,
-        error:
-          "Failed to generate next step. Please try again.",
+        error: "Failed to generate next step. Please try again.",
       };
     }
   }
@@ -144,14 +121,8 @@ RULES:
 `;
   }
 
-  private buildContextAwarePrompt(
-    request: NextStepRequest,
-  ): string {
-    const {
-      goal,
-      pageContext,
-      history,
-    } = request;
+  private buildContextAwarePrompt(request: NextStepRequest): string {
+    const { goal, pageContext, history } = request;
 
     const formatEl = (
       el: (typeof pageContext.visibleButtons)[0],
@@ -163,13 +134,8 @@ RULES:
         parts.push(`text="${el.text}"`);
       }
 
-      if (
-        el.ariaLabel &&
-        el.ariaLabel !== el.text
-      ) {
-        parts.push(
-          `aria-label="${el.ariaLabel}"`,
-        );
+      if (el.ariaLabel && el.ariaLabel !== el.text) {
+        parts.push(`aria-label="${el.ariaLabel}"`);
       }
 
       if (el.role) {
@@ -179,46 +145,27 @@ RULES:
       return parts.join(" ");
     };
 
-    const elementsList =
-      pageContext.visibleButtons
-        .map((el, i) => formatEl(el, i))
-        .join("\n");
+    const elementsList = pageContext.visibleButtons
+      .map((el, i) => formatEl(el, i))
+      .join("\n");
 
     const historyText =
       history.length === 0
         ? "None"
-        : history
-            .map(
-              (h, i) =>
-                `${i + 1}. ${h.instruction} ✓`,
-            )
-            .join("\n");
+        : history.map((h, i) => `${i + 1}. ${h.instruction} ✓`).join("\n");
 
     const recentSteps = history
       .slice(-6)
-      .map(
-        (h) =>
-          h.targetText ||
-          h.instruction,
-      );
+      .map((h) => h.targetText || h.instruction);
 
-    const uniqueSteps =
-      new Set(recentSteps);
+    const uniqueSteps = new Set(recentSteps);
 
-    const loopDetected =
-      recentSteps.length >= 4 &&
-      uniqueSteps.size <= 2;
+    const loopDetected = recentSteps.length >= 4 && uniqueSteps.size <= 2;
 
     const formStateText =
-      Object.keys(pageContext.formState)
-        .length > 0
-        ? Object.entries(
-            pageContext.formState,
-          )
-            .map(
-              ([k, v]) =>
-                `- ${k}: ${v}`,
-            )
+      Object.keys(pageContext.formState).length > 0
+        ? Object.entries(pageContext.formState)
+            .map(([k, v]) => `- ${k}: ${v}`)
             .join("\n")
         : "No active forms or dialogs.";
 
@@ -276,92 +223,48 @@ Respond with JSON only.
     request: NextStepRequest,
   ): NextStepResponse {
     try {
-      let clean =
-        responseText.trim();
+      let clean = responseText.trim();
 
-      if (
-        clean.startsWith("```")
-      ) {
-        clean = clean
-          .replace(
-            /```json?\s*/g,
-            "",
-          )
-          .replace(
-            /```\s*$/g,
-            "",
-          );
+      if (clean.startsWith("```")) {
+        clean = clean.replace(/```json?\s*/g, "").replace(/```\s*$/g, "");
       }
 
-      const parsed =
-        JSON.parse(clean);
+      const parsed = JSON.parse(clean);
 
-      if (
-        !parsed.instruction ||
-        typeof parsed.instruction !==
-          "string"
-      ) {
-        throw new Error(
-          "Missing instruction",
-        );
+      if (!parsed.instruction || typeof parsed.instruction !== "string") {
+        throw new Error("Missing instruction");
       }
 
-      const step: GuidanceStep =
-        {
-          instruction:
-            parsed.instruction.trim(),
+      const step: GuidanceStep = {
+        instruction: parsed.instruction.trim(),
 
-          targetSelector: (
-            parsed.targetSelector ||
-            parsed.targetText ||
-            ""
-          ).trim(),
+        targetSelector: (
+          parsed.targetSelector ||
+          parsed.targetText ||
+          ""
+        ).trim(),
 
-          targetText: (
-            parsed.targetText ||
-            parsed.targetSelector ||
-            ""
-          ).trim(),
+        targetText: (parsed.targetText || parsed.targetSelector || "").trim(),
 
-          fallbackText: (
-            parsed.fallbackText ||
-            ""
-          ).trim(),
+        fallbackText: (parsed.fallbackText || "").trim(),
 
-          waitFor: (
-            parsed.waitFor ||
-            ""
-          ).trim(),
+        waitFor: (parsed.waitFor || "").trim(),
 
-          stepIndex:
-            request.history.length,
-        };
+        stepIndex: request.history.length,
+      };
 
       return {
         success: true,
         step,
-        isComplete:
-          parsed.isComplete ===
-          true,
-        message:
-          parsed.message ||
-          undefined,
+        isComplete: parsed.isComplete === true,
+        message: parsed.message || undefined,
       };
     } catch (err) {
-      console.error(
-        "[AIService] Failed to parse response:",
-        err,
-      );
+      console.error("[AIService] Failed to parse response:", err);
 
-      console.error(
-        "[AIService] Raw text:",
-        responseText,
-      );
+      console.error("[AIService] Raw text:", responseText);
 
-      const instruction =
-        this.extractInstructionFromText(
-          responseText,
-        );
+      const instruction = this.extractInstructionFromText(responseText);
 
       if (instruction) {
         return {
@@ -372,64 +275,46 @@ Respond with JSON only.
             targetText: "",
             fallbackText: "",
             waitFor: "",
-            stepIndex:
-              request.history.length,
+            stepIndex: request.history.length,
           },
           isComplete: false,
-          message:
-            "AI returned non-JSON response.",
+          message: "AI returned non-JSON response.",
         };
       }
 
       return {
         success: false,
-        step: this.getFallbackStep(
-          request,
-        ),
+        step: this.getFallbackStep(request),
         isComplete: false,
-        error:
-          "Could not parse AI response.",
+        error: "Could not parse AI response.",
       };
     }
   }
 
-  private extractInstructionFromText(
-    text: string,
-  ): string | null {
-    const clean =
-      text.trim();
+  private extractInstructionFromText(text: string): string | null {
+    const clean = text.trim();
 
-    if (
-      clean.length > 10 &&
-      clean.length < 200
-    ) {
+    if (clean.length > 10 && clean.length < 200) {
       return clean;
     }
 
-    const match =
-      clean.match(
-        /(Click|Type|Select|Navigate|Open|Enter|Choose|Search|Scroll|Find).+?[.!]/i,
-      );
+    const match = clean.match(
+      /(Click|Type|Select|Navigate|Open|Enter|Choose|Search|Scroll|Find).+?[.!]/i,
+    );
 
-    return match
-      ? match[0]
-      : null;
+    return match ? match[0] : null;
   }
 
-  private getFallbackStep(
-    request: NextStepRequest,
-  ): GuidanceStep {
+  private getFallbackStep(request: NextStepRequest): GuidanceStep {
     return {
       instruction: `Look for the next action related to: "${request.goal}"`,
       targetSelector: "",
       targetText: "",
       fallbackText: "",
       waitFor: "",
-      stepIndex:
-        request.history.length,
+      stepIndex: request.history.length,
     };
   }
 }
 
-export const aiService =
-  new AIService();
+export const aiService = new AIService();
