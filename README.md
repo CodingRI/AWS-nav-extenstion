@@ -62,6 +62,10 @@ sequenceDiagram
 ```
 
 ---
+## Demo video
+
+https://github.com/user-attachments/assets/84ed96f3-3ca9-445c-8135-3fce382e4057
+
 
 ##  Tech Stack
 
