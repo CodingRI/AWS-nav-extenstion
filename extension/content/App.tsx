@@ -11,6 +11,7 @@ import {
   Square,
   RefreshCw,
   AlertTriangle,
+  ChevronRight,
 } from "lucide-react";
 import type {
   GuidanceStep,
@@ -32,7 +33,7 @@ import "./App.css";
 
 type Message = SessionMessage;
 
-const API_BASE_URL = "http://localhost:3000";
+const API_BASE_URL = "http://localhost:8000";
 const EXPIRY_CHECK_INTERVAL_MS = 30 * 1000;
 const MAX_AUTO_RETRIES = 2;
 
@@ -52,6 +53,8 @@ export const App: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [session, setSession] = useState<GuidanceSession | null>(null);
   const [retryCount, setRetryCount] = useState(0);
+  const [pageSteps, setPageSteps] = useState<GuidanceStep[]>([]);
+  const [pageStepIndex, setPageStepIndex] = useState(0);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -121,25 +124,61 @@ export const App: React.FC = () => {
      free to interact naturally. Guidance only advances on the target click.
      ======================================================================== */
 
-  const attachClickHandlers = useCallback((el: HTMLElement) => {
-    highlighter.attachClickDetection(el, async () => {
-      console.log("[App] Target clicked, advancing...");
-      await sessionManager.completeCurrentStep();
-      console.log("[App] Step completed by actual user click");
-      setRetryCount(0);
+  const advanceToNextPageStep = useCallback(async () => {
+    await sessionManager.completeCurrentStep();
+    setRetryCount(0);
 
-      // Wait a moment for AWS to navigate/update the DOM, then request next step
-      setTimeout(async () => {
-        const s = await sessionManager.getActiveSession();
-        if (s && s.status === "active") {
-          setSession(s);
-          await waitForDomSettle(600, 3000);
-          // Always use ref so we get the latest function, not a stale closure
-          await requestNextStepRef.current(s);
+    setPageSteps((currentSteps) => {
+      setPageStepIndex((currentIndex) => {
+        const nextIndex = currentIndex + 1;
+
+        if (nextIndex < currentSteps.length) {
+          const nextStep = currentSteps[nextIndex]!;
+          (async () => {
+            const updatedSession = await sessionManager.addStep(nextStep);
+            if (updatedSession) setSession(updatedSession);
+            addMessage("assistant", nextStep.instruction);
+
+            const el = await highlighter.highlightStep(nextStep);
+            if (el) {
+              attachClickHandlersRef.current(el);
+            }
+          })();
+          return nextIndex;
         }
-      }, 800);
+
+        // All page steps done — request next from LLM
+        setTimeout(async () => {
+          const s = await sessionManager.getActiveSession();
+          if (s && s.status === "active") {
+            setSession(s);
+            await waitForDomSettle(600, 3000);
+            await requestNextStepRef.current(s);
+          }
+        }, 800);
+        return currentIndex;
+      });
+      return currentSteps;
     });
-  }, []);
+  }, [addMessage]);
+
+  const attachClickHandlers = useCallback(
+    (el: HTMLElement) => {
+      const tag = el.tagName.toUpperCase();
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") {
+        console.log("[App] Input element — advance via Next button, not click");
+        return;
+      }
+      highlighter.attachClickDetection(el, () => {
+        console.log("[App] Target clicked, advancing...");
+        advanceToNextPageStep();
+      });
+    },
+    [advanceToNextPageStep],
+  );
+
+  const attachClickHandlersRef = useRef(attachClickHandlers);
+  attachClickHandlersRef.current = attachClickHandlers;
 
   /* ========================================================================
      ON MOUNT: check existing session + start watchers
@@ -243,17 +282,15 @@ export const App: React.FC = () => {
           const pendingStep = sessionManager.getLastPendingStep(updatedSession);
 
           if (pendingStep) {
-  const el = await highlighter.highlightStep(pendingStep);
+            const el = await highlighter.highlightStep(pendingStep);
 
-  if (el) {
-    attachClickHandlers(el);
-    return;
-  }
+            if (el) {
+              attachClickHandlers(el);
+              return;
+            }
 
-  console.log(
-    "[App] Pending step no longer exists. Re-planning..."
-  );
-}
+            console.log("[App] Pending step no longer exists. Re-planning...");
+          }
 
           await requestNextStepRef.current(updatedSession);
         }
@@ -361,7 +398,7 @@ export const App: React.FC = () => {
       let currentSession = activeSession;
 
       // Phase 1: Grab prioritized page context
-      const pageContext: PageContext = grabPageContext();
+      const pageContext: PageContext = await grabPageContext();
 
       console.log("[App] Requesting next step:", {
         goal: currentSession.goal,
@@ -372,9 +409,37 @@ export const App: React.FC = () => {
       });
 
       // Phase 2: Send to backend
+      const trimmedContext = {
+        ...pageContext,
+        visibleButtons: pageContext.visibleButtons.map(
+          ({
+            tagName,
+            text,
+            ariaLabel,
+            role,
+            value,
+            placeholder,
+            inputType,
+            name,
+          }) => ({
+            tagName,
+            text,
+            ariaLabel,
+            role,
+            value,
+            placeholder,
+            inputType,
+            name,
+            dataAnalytics: null,
+            selector: "",
+            isVisible: true,
+          }),
+        ),
+      };
+
       const request: NextStepRequest = {
         goal: currentSession.goal,
-        pageContext,
+        pageContext: trimmedContext,
         history: sessionManager.getCompletedSteps(currentSession),
         sessionId: currentSession.sessionId,
       };
@@ -398,44 +463,64 @@ export const App: React.FC = () => {
 
       // Phase 3: Check if goal is complete
       if (data.isComplete) {
+        if (hasValidationErrors()) {
+          console.log("[App] Validation errors detected");
+        } else {
+          addMessage("assistant", data.message || "Goal completed!");
+          await sessionManager.completeSession();
+          setSession(null);
+          setRetryCount(0);
+          setPageSteps([]);
+          setPageStepIndex(0);
+          highlighter.clearHighlights();
+          return;
+        }
+      }
 
-  if (hasValidationErrors()) {
+      const steps = data.steps.map((s, i) => {
+        const step = {
+          ...s,
+          stepIndex: currentSession.steps.length + i,
+          pageUrl: window.location.href,
+        };
 
-    console.log(
-      "[App] Validation errors detected"
-    );
+        // Match targetText against the element list we sent to the LLM
+        // to get the exact tagName and selector for deterministic highlighting
+        const targetNorm = (step.targetText || "").trim().toLowerCase();
+        if (targetNorm) {
+          const match = pageContext.visibleButtons.find(
+            (el) => el.text.trim().toLowerCase() === targetNorm,
+          );
+          if (match) {
+            step.tagHint = match.tagName;
+            step.selectorHint = match.selector;
+            console.log(
+              `[App] Tag hint for "${step.targetText}": <${match.tagName}> selector="${match.selector}"`,
+            );
+          }
+        }
 
-  } else {
+        return step;
+      });
 
-    addMessage(
-      "assistant",
-      data.message || "Goal completed!"
-    );
+      // Store all page steps for cycling
+      setPageSteps(steps);
+      setPageStepIndex(0);
 
-    await sessionManager.completeSession();
-
-    setSession(null);
-    setRetryCount(0);
-    highlighter.clearHighlights();
-
-    return;
-  }
-}
-
-      // Build step
-      const step: GuidanceStep = {
-        ...data.step,
-        stepIndex: currentSession.steps.length,
-        pageUrl: window.location.href,
-      };
-
-      // Add step to session
-      const updatedSession = await sessionManager.addStep(step);
+      // Start with the first step
+      const firstStep = steps[0]!;
+      const updatedSession = await sessionManager.addStep(firstStep);
       setSession(updatedSession);
-      addMessage("assistant", step.instruction);
+      addMessage("assistant", firstStep.instruction);
+      if (steps.length > 1) {
+        addMessage(
+          "system",
+          `${steps.length} actions on this page — use "Next" after each one.`,
+        );
+      }
 
-      // Phase 4: Find and highlight the element
-      const el = await highlighter.highlightStep(step);
+      // Phase 4: Find and highlight the first element
+      const el = await highlighter.highlightStep(firstStep);
 
       if (!el) {
         console.log(
@@ -465,7 +550,7 @@ export const App: React.FC = () => {
 
         addMessage(
           "error",
-          `Could not find "${step.targetText || "the target element"}" on this page after ${MAX_AUTO_RETRIES} attempts.\n\nTry: scrolling down, opening a required dropdown first, or waiting for the page to load.`,
+          `Could not find "${firstStep.targetText || "the target element"}" on this page after ${MAX_AUTO_RETRIES} attempts.\n\nTry: scrolling down, opening a required dropdown first, or waiting for the page to load.`,
           "retry-step",
         );
         return;
@@ -577,11 +662,17 @@ export const App: React.FC = () => {
     await requestNextStep(newSession);
   };
 
+  const handleNextPageStep = async () => {
+    await advanceToNextPageStep();
+  };
+
   const handleStopGuide = async () => {
     highlighter.clearHighlights();
     await sessionManager.stopSession();
     setSession(null);
     setRetryCount(0);
+    setPageSteps([]);
+    setPageStepIndex(0);
     addMessage("system", "Guidance stopped.");
   };
 
@@ -614,6 +705,8 @@ export const App: React.FC = () => {
   const isGuidanceActive = session?.status === "active";
   const isGuidancePaused = session?.status === "paused";
   const completedSteps = session?.steps.filter((s) => s.completedAt) || [];
+  const hasMorePageSteps =
+    pageSteps.length > 1 && pageStepIndex < pageSteps.length - 1;
 
   return (
     <div className="aws-nav-assistant">
@@ -755,6 +848,18 @@ export const App: React.FC = () => {
               <div className="aws-nav-controls">
                 {(isGuidanceActive || isGuidancePaused) && (
                   <div className="aws-nav-guide-controls">
+                    {hasMorePageSteps && isGuidanceActive && (
+                      <button
+                        className="aws-nav-button-next"
+                        onClick={handleNextPageStep}
+                        disabled={isLoading}
+                      >
+                        Next <ChevronRight size={14} />
+                        <span className="aws-nav-step-counter">
+                          {pageStepIndex + 1}/{pageSteps.length}
+                        </span>
+                      </button>
+                    )}
                     {isGuidancePaused && (
                       <button
                         className="aws-nav-button-resume"

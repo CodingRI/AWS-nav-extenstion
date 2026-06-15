@@ -421,6 +421,37 @@
   border-color: #00FF88;
 }
 
+.aws-nav-button-next {
+  padding: 6px 14px;
+  background: rgba(0, 170, 255, 0.2);
+  color: #00D9FF;
+  border: 1px solid rgba(0, 170, 255, 0.4);
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.aws-nav-button-next:hover {
+  background: rgba(0, 170, 255, 0.35);
+  border-color: #00D9FF;
+}
+
+.aws-nav-button-next:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.aws-nav-step-counter {
+  font-size: 11px;
+  opacity: 0.7;
+  margin-left: 2px;
+}
+
 /* Input area */
 .aws-nav-input-container {
   padding: 10px 12px;
