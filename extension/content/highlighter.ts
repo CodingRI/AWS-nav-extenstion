@@ -16,6 +16,46 @@ export class ElementHighlighter {
 
   private currentTargetElement: HTMLElement | null = null;
 
+  private getAbsoluteRect(el: HTMLElement): DOMRect {
+    const rect = el.getBoundingClientRect();
+    const ownerDoc = el.ownerDocument;
+    if (ownerDoc === document) return rect;
+
+    for (const iframe of Array.from(document.querySelectorAll("iframe"))) {
+      try {
+        if ((iframe as HTMLIFrameElement).contentDocument === ownerDoc) {
+          const iframeRect = iframe.getBoundingClientRect();
+          return new DOMRect(
+            rect.x + iframeRect.x,
+            rect.y + iframeRect.y,
+            rect.width,
+            rect.height,
+          );
+        }
+      } catch { /* cross-origin */ }
+    }
+    return rect;
+  }
+
+  private getSearchRoots(): Document[] {
+    const roots: Document[] = [document];
+    for (const iframe of Array.from(document.querySelectorAll("iframe"))) {
+      try {
+        const doc = (iframe as HTMLIFrameElement).contentDocument;
+        if (doc?.body) roots.push(doc);
+      } catch { /* cross-origin */ }
+    }
+    return roots;
+  }
+
+  private queryAllRoots(selector: string): HTMLElement[] {
+    const results: HTMLElement[] = [];
+    for (const root of this.getSearchRoots()) {
+      results.push(...(Array.from(root.querySelectorAll(selector)) as HTMLElement[]));
+    }
+    return results;
+  }
+
   /**
    * Find an element for the given step and spotlight it.
    * Returns the found element, or null if not found.
@@ -169,37 +209,105 @@ export class ElementHighlighter {
   private findInputElement(targetText: string): HTMLElement | null {
     const label = targetText
       .replace("[input:", "")
+      .replace("[textarea:", "")
+      .replace("[dropdown:", "")
       .replace("]", "")
       .trim()
       .toLowerCase();
 
-    const inputs = document.querySelectorAll(
-      'input, textarea, [contenteditable="true"]',
-    );
+    const selector = 'input, textarea, select, [contenteditable="true"]';
+    const allInputs: HTMLElement[] = [];
 
-    for (const el of Array.from(inputs)) {
-      const htmlEl = el as HTMLElement;
+    // Collect from main doc + iframes
+    allInputs.push(...this.queryAllRoots(selector));
 
-      const placeholder = ((el as HTMLInputElement).placeholder || "")
-        .toLowerCase()
-        .trim();
-
-      const aria = (htmlEl.getAttribute("aria-label") || "")
-        .toLowerCase()
-        .trim();
-
-      const name = (htmlEl.getAttribute("name") || "").toLowerCase().trim();
-
-      if (
-        placeholder.includes(label) ||
-        aria.includes(label) ||
-        name.includes(label)
-      ) {
-        return htmlEl;
+    // Collect from shadow DOMs across all roots
+    for (const root of this.getSearchRoots()) {
+      const body = root.body;
+      if (!body) continue;
+      const walker = root.createTreeWalker(body, NodeFilter.SHOW_ELEMENT);
+      let node = walker.nextNode();
+      while (node) {
+        const el = node as Element;
+        if (el.shadowRoot) {
+          allInputs.push(
+            ...(Array.from(el.shadowRoot.querySelectorAll(selector)) as HTMLElement[]),
+          );
+        }
+        node = walker.nextNode();
       }
     }
 
-    return null;
+    let bestMatch: HTMLElement | null = null;
+    let bestScore = 0;
+
+    for (const el of allInputs) {
+      if (!this.isValidTarget(el)) continue;
+
+      const attrs = this.getInputAttrs(el);
+      let score = 0;
+
+      // Exact match on any attribute
+      for (const attr of attrs) {
+        if (attr === label) { score = 100; break; }
+        if (attr.includes(label) || label.includes(attr)) {
+          score = Math.max(score, 50);
+        }
+      }
+
+      // Word overlap for partial matches
+      if (score === 0 && label.length > 3) {
+        const labelWords = label.split(/\s+/).filter(w => w.length > 2);
+        for (const attr of attrs) {
+          const matched = labelWords.filter(w => attr.includes(w)).length;
+          if (matched > 0) {
+            score = Math.max(score, (matched / labelWords.length) * 40);
+          }
+        }
+      }
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestMatch = el;
+      }
+    }
+
+    return bestMatch;
+  }
+
+  private getInputAttrs(el: HTMLElement): string[] {
+    const attrs: string[] = [];
+    const add = (val: string | null | undefined) => {
+      if (val?.trim()) attrs.push(val.trim().toLowerCase());
+    };
+
+    add(el.getAttribute("aria-label"));
+    add(el.getAttribute("placeholder"));
+    add(el.getAttribute("name"));
+    add(el.id);
+
+    // Resolve aria-labelledby — check shadow root first, then owner document
+    const labelledBy = el.getAttribute("aria-labelledby");
+    if (labelledBy) {
+      const rootNode = el.getRootNode();
+      const escapedId = CSS.escape(labelledBy);
+      const labelEl =
+        (rootNode as ShadowRoot | Document).querySelector?.(`#${escapedId}`) ??
+        document.querySelector(`#${escapedId}`);
+      add(labelEl?.textContent);
+    }
+
+    // Associated <label for="id">
+    if (el.id) {
+      const rootNode = el.getRootNode();
+      const escapedId = CSS.escape(el.id);
+      const labelEl =
+        (rootNode as ShadowRoot | Document).querySelector?.(`label[for="${escapedId}"]`) ??
+        document.querySelector(`label[for="${escapedId}"]`);
+      add(labelEl?.textContent);
+    }
+
+    return attrs;
   }
   /**
    * Waterfall element-finding strategy.
@@ -209,7 +317,7 @@ export class ElementHighlighter {
     const targetText = (step.targetText || "").trim();
     const targetSelector = (step.targetSelector || "").trim();
 
-    if (targetText.startsWith("[input:")) {
+    if (targetText.startsWith("[input:") || targetText.startsWith("[textarea:") || targetText.startsWith("[dropdown:")) {
       const inputMatch = this.findInputElement(targetText);
 
       if (inputMatch) {
@@ -220,6 +328,16 @@ export class ElementHighlighter {
     }
 
     if (!targetText && !targetSelector) return null;
+
+    // Strategy 0: Tag hint — deterministic match using tag + text from element list
+    if (step.tagHint && targetText) {
+      const el = this.findByTagAndText(step.tagHint, targetText, step.selectorHint);
+      if (el) {
+        this._lastFindStrategy = "tag-hint";
+        console.log(`[Highlighter] ✓ Found via tag hint: <${step.tagHint}> "${targetText}"`);
+        return el;
+      }
+    }
 
     // Strategy 1: Exact aria-label — main DOM then Shadow DOM
     if (targetText) {
@@ -344,6 +462,81 @@ export class ElementHighlighter {
   }
 
   /* ========================================================================
+     TAG + TEXT MATCH (Strategy 0 — deterministic, from element list lookup)
+     ======================================================================== */
+
+  private findByTagAndText(
+    tagHint: string,
+    targetText: string,
+    selectorHint?: string,
+  ): HTMLElement | null {
+    const tag = tagHint.toLowerCase();
+    const normalized = targetText.toLowerCase().trim();
+
+    // First try the exact CSS selector from the element list
+    if (selectorHint) {
+      const el = this.findByCSSSelector(selectorHint);
+      if (el && el.tagName.toLowerCase() === tag) {
+        return el;
+      }
+    }
+
+    // Search all roots (main doc + iframes) for elements of this tag
+    const candidates: HTMLElement[] = [];
+
+    for (const el of this.queryAllRoots(tag)) {
+      if (!this.isValidTarget(el)) continue;
+
+      const elText = (el.textContent || "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .toLowerCase();
+
+      // Also check aria-label
+      const ariaLabel = (el.getAttribute("aria-label") || "")
+        .trim()
+        .toLowerCase();
+
+      if (elText === normalized || ariaLabel === normalized) {
+        candidates.push(el);
+      }
+    }
+
+    // Also search shadow DOMs
+    for (const root of this.getSearchRoots()) {
+      const body = root.body;
+      if (!body) continue;
+      const walker = root.createTreeWalker(body, NodeFilter.SHOW_ELEMENT);
+      let node = walker.nextNode();
+      while (node) {
+        const el = node as Element;
+        if (el.shadowRoot) {
+          for (const shadowEl of Array.from(el.shadowRoot.querySelectorAll(tag)) as HTMLElement[]) {
+            if (!this.isValidTarget(shadowEl)) continue;
+            const elText = (shadowEl.textContent || "")
+              .replace(/\s+/g, " ")
+              .trim()
+              .toLowerCase();
+            const ariaLabel = (shadowEl.getAttribute("aria-label") || "")
+              .trim()
+              .toLowerCase();
+            if (elText === normalized || ariaLabel === normalized) {
+              candidates.push(shadowEl);
+            }
+          }
+        }
+        node = walker.nextNode();
+      }
+    }
+
+    if (candidates.length === 0) return null;
+    if (candidates.length === 1) return candidates[0]!;
+
+    // Multiple same-tag matches — use scoring to disambiguate
+    return this.pickBestCandidate(candidates, normalized);
+  }
+
+  /* ========================================================================
      SHADOW DOM TRAVERSAL (for awsui-* web components)
      AWS Console embeds most buttons/links in shadow roots — standard
      querySelectorAll() cannot see them at all.
@@ -380,18 +573,19 @@ export class ElementHighlighter {
       return null;
     };
 
-    const walker = document.createTreeWalker(
-      document.body,
-      NodeFilter.SHOW_ELEMENT,
-    );
-    let node = walker.nextNode();
-    while (node) {
-      const el = node as Element;
-      if (el.shadowRoot) {
-        const found = searchRoot(el.shadowRoot);
-        if (found) return found;
+    for (const root of this.getSearchRoots()) {
+      const body = root.body;
+      if (!body) continue;
+      const walker = root.createTreeWalker(body, NodeFilter.SHOW_ELEMENT);
+      let node = walker.nextNode();
+      while (node) {
+        const el = node as Element;
+        if (el.shadowRoot) {
+          const found = searchRoot(el.shadowRoot);
+          if (found) return found;
+        }
+        node = walker.nextNode();
       }
-      node = walker.nextNode();
     }
     return null;
   }
@@ -429,18 +623,19 @@ export class ElementHighlighter {
       return null;
     };
 
-    const walker = document.createTreeWalker(
-      document.body,
-      NodeFilter.SHOW_ELEMENT,
-    );
-    let node = walker.nextNode();
-    while (node) {
-      const el = node as Element;
-      if (el.shadowRoot) {
-        const found = searchRoot(el.shadowRoot);
-        if (found) return found;
+    for (const root of this.getSearchRoots()) {
+      const body = root.body;
+      if (!body) continue;
+      const walker = root.createTreeWalker(body, NodeFilter.SHOW_ELEMENT);
+      let node = walker.nextNode();
+      while (node) {
+        const el = node as Element;
+        if (el.shadowRoot) {
+          const found = searchRoot(el.shadowRoot);
+          if (found) return found;
+        }
+        node = walker.nextNode();
       }
-      node = walker.nextNode();
     }
     return null;
   }
@@ -461,26 +656,69 @@ export class ElementHighlighter {
       '[role="menuitem"]',
     ];
 
-    let sidebarMatch: HTMLElement | null = null;
+    const candidates: HTMLElement[] = [];
 
     for (const selector of selectors) {
-      for (const el of Array.from(document.querySelectorAll(selector))) {
-        const htmlEl = el as HTMLElement;
-        if (!this.isValidTarget(htmlEl)) continue;
-        const elText = (htmlEl.textContent || "")
+      for (const el of this.queryAllRoots(selector)) {
+        if (!this.isValidTarget(el)) continue;
+        const elText = (el.textContent || "")
           .replace(/\s+/g, " ")
           .trim()
           .toLowerCase();
         if (elText === normalized) {
-          if (this.isInSideNav(htmlEl)) {
-            if (!sidebarMatch) sidebarMatch = htmlEl;
-          } else {
-            return htmlEl;
-          }
+          candidates.push(el);
         }
       }
     }
-    return sidebarMatch;
+
+    if (candidates.length === 0) return null;
+    if (candidates.length === 1) return candidates[0]!;
+
+    // Multiple matches — score to pick the most specific one
+    return this.pickBestCandidate(candidates, normalized);
+  }
+
+  private pickBestCandidate(candidates: HTMLElement[], targetText: string): HTMLElement {
+    let best = candidates[0]!;
+    let bestScore = -Infinity;
+
+    for (const el of candidates) {
+      let score = 0;
+
+      // Prefer elements with fewer children (leaf-like = more specific)
+      const childCount = el.querySelectorAll("*").length;
+      score -= childCount * 5;
+
+      // Prefer smaller elements (link-sized, not containers)
+      const rect = this.getAbsoluteRect(el);
+      if (rect.width > 0 && rect.width < 300 && rect.height > 0 && rect.height < 80) {
+        score += 30;
+      }
+
+      // Prefer elements in the viewport
+      if (rect.top >= 0 && rect.top < window.innerHeight) {
+        score += 20;
+      }
+
+      // Prefer <a> and <button> tags
+      const tag = el.tagName.toLowerCase();
+      if (tag === "a") score += 15;
+      if (tag === "button") score += 15;
+
+      // Penalize sidebar
+      if (this.isInSideNav(el)) score -= 40;
+
+      // Prefer elements whose text is closest in length to target (most specific)
+      const textLen = (el.textContent || "").trim().length;
+      score -= Math.abs(textLen - targetText.length) * 2;
+
+      if (score > bestScore) {
+        bestScore = score;
+        best = el;
+      }
+    }
+
+    return best;
   }
 
   /**
@@ -488,13 +726,11 @@ export class ElementHighlighter {
    */
   private findByAriaLabel(text: string, exact: boolean): HTMLElement | null {
     const normalized = text.toLowerCase().trim();
-    const allElements = document.querySelectorAll("[aria-label]");
-
-    let sidebarMatch: HTMLElement | null = null;
+    const allElements = this.queryAllRoots("[aria-label]");
+    const candidates: HTMLElement[] = [];
 
     for (const el of Array.from(allElements)) {
-      const htmlEl = el as HTMLElement;
-      const label = (htmlEl.getAttribute("aria-label") || "")
+      const label = (el.getAttribute("aria-label") || "")
         .toLowerCase()
         .trim();
 
@@ -502,15 +738,14 @@ export class ElementHighlighter {
         ? label === normalized
         : label.includes(normalized) || normalized.includes(label);
 
-      if (matches && this.isValidTarget(htmlEl)) {
-        if (this.isInSideNav(htmlEl)) {
-          if (!sidebarMatch) sidebarMatch = htmlEl;
-        } else {
-          return htmlEl;
-        }
+      if (matches && this.isValidTarget(el)) {
+        candidates.push(el);
       }
     }
-    return sidebarMatch;
+
+    if (candidates.length === 0) return null;
+    if (candidates.length === 1) return candidates[0]!;
+    return this.pickBestCandidate(candidates, normalized);
   }
 
   /**
@@ -518,7 +753,7 @@ export class ElementHighlighter {
    */
   private findByDataAnalytics(text: string): HTMLElement | null {
     const normalized = text.toLowerCase().trim();
-    const allElements = document.querySelectorAll("[data-analytics-metadata]");
+    const allElements = this.queryAllRoots("[data-analytics-metadata]");
 
     for (const el of Array.from(allElements)) {
       const htmlEl = el as HTMLElement;
@@ -554,7 +789,7 @@ export class ElementHighlighter {
     }
     const candidates: Candidate[] = [];
 
-    const allInteractive = document.querySelectorAll(
+    const allInteractive = this.queryAllRoots(
       'button, a[href], [role="button"], [role="link"], [role="tab"], [role="menuitem"]',
     );
 
@@ -635,13 +870,15 @@ export class ElementHighlighter {
    * Try a CSS selector directly.
    */
   private findByCSSSelector(selector: string): HTMLElement | null {
-    try {
-      const el = document.querySelector(selector) as HTMLElement | null;
-      if (el && this.isValidTarget(el)) {
-        return el;
+    for (const root of this.getSearchRoots()) {
+      try {
+        const el = root.querySelector(selector) as HTMLElement | null;
+        if (el && this.isValidTarget(el)) {
+          return el;
+        }
+      } catch {
+        // Invalid CSS selector, skip
       }
-    } catch {
-      // Invalid CSS selector, skip
     }
     return null;
   }
@@ -672,25 +909,21 @@ export class ElementHighlighter {
     let bestScore = 0;
 
     for (const selector of interactiveSelectors) {
-      const elements = document.querySelectorAll(selector);
-      for (const el of Array.from(elements)) {
-        const htmlEl = el as HTMLElement;
-        if (!this.isValidTarget(htmlEl)) continue;
+      for (const el of this.queryAllRoots(selector)) {
+        if (!this.isValidTarget(el)) continue;
 
-        const elText = (htmlEl.textContent || "").toLowerCase().trim();
+        const elText = (el.textContent || "").toLowerCase().trim();
         if (!elText || elText.length > 100) continue;
 
-        // Count how many target words appear in the element text
         let matchCount = 0;
         for (const word of words) {
           if (elText.includes(word)) matchCount++;
         }
 
-        // Require at least 60% of words to match
         const score = matchCount / words.length;
         if (score >= 0.6 && score > bestScore) {
           bestScore = score;
-          bestMatch = htmlEl;
+          bestMatch = el;
         }
       }
     }
@@ -723,21 +956,18 @@ export class ElementHighlighter {
     let bestDistance = maxDistance + 1;
 
     for (const selector of interactiveSelectors) {
-      const elements = document.querySelectorAll(selector);
-      for (const el of Array.from(elements)) {
-        const htmlEl = el as HTMLElement;
-        if (!this.isValidTarget(htmlEl)) continue;
+      for (const el of this.queryAllRoots(selector)) {
+        if (!this.isValidTarget(el)) continue;
 
-        const elText = (htmlEl.textContent || "").trim().toLowerCase();
+        const elText = (el.textContent || "").trim().toLowerCase();
         if (!elText || elText.length > 80) continue;
 
-        // Skip if length difference is too large (quick pre-filter)
         if (Math.abs(elText.length - normalized.length) > maxDistance) continue;
 
         const dist = this.levenshteinDistance(normalized, elText);
         if (dist <= maxDistance && dist < bestDistance) {
           bestDistance = dist;
-          bestMatch = htmlEl;
+          bestMatch = el;
         }
       }
     }
@@ -867,7 +1097,7 @@ export class ElementHighlighter {
       const tag = current.tagName.toLowerCase();
       const role = current.getAttribute("role") || "";
       const id = (current.id || "").toLowerCase();
-      const cls = (current.className || "").toLowerCase();
+      const cls = (typeof current.className === "string" ? current.className : "").toLowerCase();
       if (
         tag === "nav" ||
         tag === "aside" ||
@@ -992,7 +1222,7 @@ export class ElementHighlighter {
         return;
       }
 
-      const rect = el.getBoundingClientRect();
+      const rect = this.getAbsoluteRect(el);
       const padding = 8;
 
       // Box position
@@ -1049,6 +1279,17 @@ export class ElementHighlighter {
       } as EventListenerOptions);
       window.removeEventListener("resize", scrollHandler);
     });
+
+    // If element is in an iframe, also listen for scroll/resize inside it
+    const elWindow = el.ownerDocument.defaultView;
+    if (elWindow && elWindow !== window) {
+      elWindow.addEventListener("scroll", scrollHandler, { capture: true, passive: true });
+      elWindow.addEventListener("resize", scrollHandler, { passive: true });
+      this.scrollListeners.push(() => {
+        elWindow.removeEventListener("scroll", scrollHandler, { capture: true } as EventListenerOptions);
+        elWindow.removeEventListener("resize", scrollHandler);
+      });
+    }
 
     overlay.appendChild(box);
     overlay.appendChild(arrow);

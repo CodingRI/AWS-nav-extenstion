@@ -36,13 +36,23 @@ const SERVICE_PATTERNS: Record<string, string> = {
   "/console/home": "Console Home",
 };
 
-// No hard cap — send everything visible to the AI
+function waitForPageReady(): Promise<void> {
+  return new Promise((resolve) => {
+    if (document.readyState === "complete") {
+      setTimeout(resolve, 500);
+      return;
+    }
+    window.addEventListener("load", () => setTimeout(resolve, 500), { once: true });
+  });
+}
 
 /* ============================================================
    Master export
    ============================================================ */
 
-export function grabPageContext(): PageContext {
+export async function grabPageContext(): Promise<PageContext> {
+  await waitForPageReady();
+
   const url = window.location.href;
   const service = parseAWSService(url);
   const title = document.title;
@@ -74,91 +84,188 @@ export function grabPageContext(): PageContext {
 
 
 
+const ACTION_SELECTOR = 'a, button, input:not([type="hidden"]), select, textarea';
+
 function scanAndRankElements(): InteractiveElement[] {
   const collected: InteractiveElement[] = [];
   const seen = new Set<Element>();
 
-  const candidates = document.querySelectorAll(
-    'button, a[href], [role="button"], [role="link"], [role="tab"], ' +
-      '[role="menuitem"], [role="option"], input:not([type="hidden"]), ' +
-      'select, textarea'
-  );
+  const beforeMain = collected.length;
+  collectFromRoot(document, seen, collected);
+  console.log(`[ContextGrabber] Main document: ${collected.length - beforeMain} elements`);
 
-  for (const el of Array.from(candidates)) {
-    if (seen.has(el)) continue;
-    seen.add(el);
+  const beforeShadow = collected.length;
+  let shadowRootCount = 0;
+  collectFromShadowRoots(document.body, seen, collected, (count) => { shadowRootCount = count; });
+  console.log(`[ContextGrabber] Shadow DOM: ${collected.length - beforeShadow} elements from ${shadowRootCount} shadow roots`);
 
-    const htmlEl = el as HTMLElement;
-
-    if (isExtensionUI(htmlEl)) continue;
-    if (!isVisible(htmlEl)) continue;
-    if (htmlEl.hasAttribute("disabled")) continue;
-    if (htmlEl.getAttribute("aria-disabled") === "true") continue;
-    if (htmlEl.getAttribute("aria-hidden") === "true") continue;
-
-    const label = getLabel(htmlEl);
-
-    if (!label) continue;
-
-    if (label.length > 120) continue;
-
-    collected.push({
-      tagName: htmlEl.tagName.toLowerCase(),
-      text: label.substring(0, 80),
-      ariaLabel: htmlEl.getAttribute("aria-label"),
-      dataAnalytics: htmlEl.getAttribute("data-analytics-metadata"),
-      role: htmlEl.getAttribute("role"),
-      selector: buildStableSelector(htmlEl),
-      isVisible: true,
-    });
-  }
+  const beforeIframe = collected.length;
+  collectFromIframes(seen, collected);
+  console.log(`[ContextGrabber] Iframes: ${collected.length - beforeIframe} elements`);
 
   console.log(
-    `[ContextGrabber] Found ${collected.length} visible elements. First 5:`,
+    `[ContextGrabber] Total: ${collected.length} visible elements. First 5:`,
     collected.slice(0, 5).map((e) => e.text || e.ariaLabel)
   );
 
   return collected;
 }
-//helper to find better elements
-function findInputLabel(input: HTMLInputElement): string | null {
 
-  const labelledBy = input.getAttribute("aria-labelledby");
+function processElement(
+  el: Element,
+  seen: Set<Element>,
+  collected: InteractiveElement[],
+): void {
+  if (seen.has(el)) return;
+  seen.add(el);
 
-if (labelledBy) {
-  const labelEl = document.getElementById(labelledBy);
+  const htmlEl = el as HTMLElement;
 
-  const text = labelEl?.textContent?.trim();
+  if (isExtensionUI(htmlEl)) return;
+  if (!isVisible(htmlEl)) return;
+  if (htmlEl.hasAttribute("disabled")) return;
+  if (htmlEl.getAttribute("aria-disabled") === "true") return;
+  if (htmlEl.getAttribute("aria-hidden") === "true") return;
 
-  if (text) {
-    return text;
+  const label = getLabel(htmlEl);
+  if (!label) return;
+
+  const tag = htmlEl.tagName;
+  const isInput = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+
+  const entry: InteractiveElement = {
+    tagName: tag.toLowerCase(),
+    text: label,
+    ariaLabel: htmlEl.getAttribute("aria-label"),
+    dataAnalytics: htmlEl.getAttribute("data-analytics-metadata"),
+    role: htmlEl.getAttribute("role"),
+    selector: buildStableSelector(htmlEl),
+    isVisible: true,
+  };
+
+  if (isInput) {
+    const inputEl = htmlEl as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
+    entry.value = inputEl.value || undefined;
+    entry.placeholder = (htmlEl.getAttribute("placeholder") || undefined);
+    entry.name = (htmlEl.getAttribute("name") || undefined);
+    if (tag === "INPUT") {
+      entry.inputType = (htmlEl as HTMLInputElement).type || "text";
+    }
+  }
+
+  collected.push(entry);
+}
+
+function collectFromRoot(
+  root: Document | ShadowRoot,
+  seen: Set<Element>,
+  collected: InteractiveElement[],
+): void {
+  const candidates = root.querySelectorAll(ACTION_SELECTOR);
+  for (const el of Array.from(candidates)) {
+    processElement(el, seen, collected);
   }
 }
+
+function collectFromIframes(
+  seen: Set<Element>,
+  collected: InteractiveElement[],
+): void {
+  const iframes = document.querySelectorAll("iframe");
+  console.log(`[ContextGrabber] Found ${iframes.length} iframes`);
+
+  for (const iframe of Array.from(iframes)) {
+    try {
+      const iframeDoc = (iframe as HTMLIFrameElement).contentDocument;
+      if (!iframeDoc?.body) continue;
+      console.log(`[ContextGrabber] Scanning iframe: ${iframe.src || iframe.id || "(anonymous)"}`);
+      collectFromRoot(iframeDoc, seen, collected);
+      collectFromShadowRoots(iframeDoc.body, seen, collected);
+      // Recurse into nested iframes
+      const nestedIframes = iframeDoc.querySelectorAll("iframe");
+      for (const nested of Array.from(nestedIframes)) {
+        try {
+          const nestedDoc = (nested as HTMLIFrameElement).contentDocument;
+          if (!nestedDoc?.body) continue;
+          collectFromRoot(nestedDoc, seen, collected);
+          collectFromShadowRoots(nestedDoc.body, seen, collected);
+        } catch { /* cross-origin */ }
+      }
+    } catch {
+      console.log(`[ContextGrabber] Cross-origin iframe, skipped: ${iframe.src || ""}`);
+    }
+  }
+}
+
+function collectFromShadowRoots(
+  root: Node,
+  seen: Set<Element>,
+  collected: InteractiveElement[],
+  onCount?: (count: number) => void,
+): void {
+  let count = 0;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+  let node = walker.nextNode();
+  while (node) {
+    const el = node as Element;
+    if (el.shadowRoot) {
+      count++;
+      collectFromRoot(el.shadowRoot, seen, collected);
+      const shadowWalker = document.createTreeWalker(el.shadowRoot, NodeFilter.SHOW_ELEMENT);
+      let shadowNode = shadowWalker.nextNode();
+      while (shadowNode) {
+        const shadowEl = shadowNode as Element;
+        if (shadowEl.shadowRoot) {
+          count++;
+          collectFromRoot(shadowEl.shadowRoot, seen, collected);
+          collectFromShadowRoots(shadowEl.shadowRoot, seen, collected);
+        }
+        shadowNode = shadowWalker.nextNode();
+      }
+    }
+    node = walker.nextNode();
+  }
+  onCount?.(count);
+}
+function findInputLabel(input: HTMLInputElement): string | null {
+  const rootNode = input.getRootNode() as ShadowRoot | Document;
+
+  const labelledBy = input.getAttribute("aria-labelledby");
+  if (labelledBy) {
+    const escapedId = CSS.escape(labelledBy);
+    const labelEl =
+      rootNode.querySelector?.(`#${escapedId}`) ??
+      document.querySelector(`#${escapedId}`);
+    const text = labelEl?.textContent?.trim();
+    if (text) return text;
+  }
+
   const aria = input.getAttribute("aria-label");
   if (aria?.trim()) return aria.trim();
 
-  const placeholder = input.getAttribute("placeholder");
-  if (placeholder?.trim()) return placeholder.trim();
-
   const id = input.id;
   if (id) {
-    const label = document.querySelector(`label[for="${id}"]`);
+    const escapedId = CSS.escape(id);
+    const label =
+      rootNode.querySelector?.(`label[for="${escapedId}"]`) ??
+      document.querySelector(`label[for="${escapedId}"]`);
     const text = label?.textContent?.trim();
     if (text) return text;
   }
 
   let parent: HTMLElement | null = input.parentElement;
-
   for (let i = 0; i < 4 && parent; i++) {
     const label = parent.querySelector("label");
     const text = label?.textContent?.trim();
-
-    if (text && text.length < 80) {
-      return text;
-    }
-
+    if (text && text.length < 80) return text;
     parent = parent.parentElement;
   }
+
+  const name = input.getAttribute("name");
+  if (name?.trim()) return name.trim();
+
+  const placeholder = input.getAttribute("placeholder");
+  if (placeholder?.trim()) return placeholder.trim();
 
   return null;
 }
@@ -181,7 +288,7 @@ if (tag === "INPUT") {
   const label = findInputLabel(el as HTMLInputElement);
 
   if (label) {
-    return `[input: ${label}]`;
+    return `[input: ${label.substring(0, 60)}]`;
   }
 
   const type = el.getAttribute("type") || "text";
@@ -189,26 +296,28 @@ if (tag === "INPUT") {
 }
 
 if (tag === "TEXTAREA") {
-  const label =
+  const label = (
     el.getAttribute("aria-label") ||
     el.getAttribute("placeholder") ||
-    "textarea";
+    "textarea"
+  ).substring(0, 60);
 
   return `[textarea: ${label}]`;
 }
 
 if (tag === "SELECT") {
-  const label =
+  const label = (
     el.getAttribute("aria-label") ||
     el.getAttribute("name") ||
-    "dropdown";
+    "dropdown"
+  ).substring(0, 60);
 
   return `[dropdown: ${label}]`;
 }
 
   // Prefer aria-label
   const ariaLabel = (el.getAttribute("aria-label") || "").trim();
-  if (ariaLabel) return ariaLabel;
+  if (ariaLabel) return ariaLabel.substring(0, 80);
 
   // Direct text content — prefer shallow text to avoid pulling in children
   const directText = Array.from(el.childNodes)
@@ -216,10 +325,10 @@ if (tag === "SELECT") {
     .map((n) => (n.textContent || "").trim())
     .join(" ")
     .trim();
-  if (directText && directText.length <= 80) return directText;
+  if (directText) return directText.substring(0, 80);
 
-  // Full text content, capped
-  const fullText = (el.textContent || "").trim();
+  // Full text content capped — avoids massive strings from container elements
+  const fullText = (el.textContent || "").replace(/\s+/g, " ").trim();
   return fullText.substring(0, 80);
 }
 
