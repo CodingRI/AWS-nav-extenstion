@@ -37,6 +37,10 @@ export interface InteractiveElement {
   role: string | null;
   selector: string;        // best-effort CSS selector for this element
   isVisible: boolean;
+  value?: string;           // current value of input/select/textarea
+  placeholder?: string;     // placeholder text
+  inputType?: string;       // input type attribute (text, search, checkbox, etc.)
+  name?: string;            // name attribute
 }
 
 /** Full context of the current AWS Console page */
@@ -61,6 +65,8 @@ export interface GuidanceStep {
   stepIndex: number;       // 0-based, incremented by session manager
   pageUrl?: string;        // URL where this step was issued
   completedAt?: number;    // timestamp when user clicked the target
+  tagHint?: string;        // HTML tag from element list lookup (e.g. "a", "button")
+  selectorHint?: string;   // CSS selector from element list lookup
 }
 
 // ----- Guidance Session (persisted across SPA navigations) -----
@@ -100,7 +106,7 @@ export interface NextStepRequest {
 
 export interface NextStepResponse {
   success: boolean;
-  step: GuidanceStep;
+  steps: GuidanceStep[];   // array of steps for the current page (highlighted one by one)
   isComplete: boolean;     // true when AI says the goal is done
   message?: string;        // optional AI message (e.g. "Goal complete!")
   error?: string;

@@ -161,12 +161,8 @@ export async function resumeSession(): Promise<GuidanceSession | null> {
  * Stop the session (user explicitly clicked Stop).
  */
 export async function stopSession(): Promise<void> {
-  const session = await getActiveSession();
-  if (session) {
-    session.status = "stopped";
-    await saveSession(session);
-  }
-  console.log("[SessionManager] Session stopped");
+  await clearSession();
+  console.log("[SessionManager] Session stopped and cleared");
 }
 
 /**
