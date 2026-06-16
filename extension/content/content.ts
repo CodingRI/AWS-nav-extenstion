@@ -18,11 +18,11 @@ async function onPageReady(): Promise<void> {
 
   console.log("[Content] Resuming:", session.goal, "| step", session.stepIndex);
 
-  const pageContext = grabPageContext();
+  const pageContext = await grabPageContext();
 
   let result;
   try {
-    const response = await fetch("http://localhost:3000/api/next-step", {
+    const response = await fetch("http://localhost:8000/api/next-step", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -47,15 +47,17 @@ async function onPageReady(): Promise<void> {
     return;
   }
 
-  const el = await highlighter.highlightStep(result.step);
+  const firstStep = result.steps[0];
+  if (!firstStep) return;
+
+  const el = await highlighter.highlightStep(firstStep);
   if (!el) {
-    console.warn("[Content] Element not found:", result.step);
+    console.warn("[Content] Element not found:", firstStep);
     return;
   }
 
   highlighter.attachClickDetection(el, async () => {
-    // Save BEFORE navigation happens so the new page loads the updated history
-    await appendStepToHistory(result.step);
+    await appendStepToHistory(firstStep);
   });
 }
 
@@ -92,7 +94,7 @@ onPageReady();
 // After every SPA navigation, wait for DOM to settle then re-run
 const stopWatcher = watchForNavigation(async (newUrl) => {
   console.log("[Content] Navigation to:", newUrl);
-  await waitForDomSettle(800, 5000);  // your existing function
+  await waitForDomSettle(800, 5000); // your existing function
   onPageReady();
 });
 
