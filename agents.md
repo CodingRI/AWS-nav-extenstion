@@ -8,53 +8,30 @@ This document serves as a comprehensive system manual and roadmap for the AWS Na
 
 The AWS Navigation Assistant is a browser-based guidance system consisting of a Manifest V3 Chrome Extension and a local Express backend. The application dynamically scans the AWS Management Console DOM, parses interactive targets, consults a Large Language Model (LLM) to determine the next operational step, and visually spotlights target elements inside the AWS console.
 
-### Directory Layout
-
-```
-. (Workspace Root)
-├── backend/                 # Express Server (OpenRouter API Integration)
-│   ├── src/
-│   │   ├── routes/          # API Route handling (/api/next-step, /api/health)
-│   │   ├── services/        # AI Service (Prompt builder & OpenRouter client)
-│   │   └── server.ts        # Server entry & CORS configurations
-│   └── package.json
-├── extension/               # Chrome Extension (React + Vite + TypeScript)
-│   ├── content/             # Content scripts running inside the AWS Console
-│   │   ├── App.tsx          # Floating chat assistant UI overlay
-│   │   ├── App.css          # Styling for the chat widget & overlays
-│   │   ├── content.ts       # Main content script entry point
-│   │   ├── contextGrabber.ts# Scrapes DOM breadcrumbs, service details, & buttons
-│   │   ├── highlighter.ts   # Locates elements (shadow DOM) & displays highlights
-│   │   ├── navigationWatcher.ts # Watches SPA and visibility changes
-│   │   ├── sessionManager.ts# Session controller (using storage key "aws_nav_active_session")
-│   │   └── sessionStore.ts  # Legacy store (using storage key "aws_nav_session")
-│   ├── src/                 # Extension popup panel (Standard SPA boilerplate)
-│   ├── background.ts        # Service worker proxying fetch calls to the backend
-│   └── manifest.json        # Extension Manifest V3 configuration
-└── shared/                  # Shared types and message declarations
-```
-
 ### File-Level Responsibilities
 
 #### Shared Space
-* [shared/src/index.ts](file:///Users/riyakarmakar/Documents/AWS%20navigation%20ext/shared/src/index.ts): Holds the master data-contracts, message type constants (`REQUEST_NEXT_STEP`, `STEP_RESULT`, `STOP_GUIDANCE`), state model definitions (`GuidanceSession`, `GuidanceStep`, `PageContext`), and API response types.
+
+- [shared/src/index.ts](file:///Users/raushan/AWS-nav-extenstion/shared/src/index.ts): Holds the master data-contracts, message type constants (`REQUEST_NEXT_STEP`, `STEP_RESULT`, `STOP_GUIDANCE`), state model definitions (`GuidanceSession`, `GuidanceStep`, `PageContext`), and API response types.
 
 #### Backend
-* [backend/src/server.ts](file:///Users/riyakarmakar/Documents/AWS%20navigation%20ext/backend/src/server.ts): Express server entry point. Defines CORS rules to accommodate requests originating from the chrome-extension protocol, initializes middleware, and spins up the HTTP server on port 3000.
-* [backend/src/routes/navigation.routes.ts](file:///Users/riyakarmakar/Documents/AWS%20navigation%20ext/backend/src/routes/navigation.routes.ts): Defines the `/api/next-step` route. It validates request parameters (goal, history list, pageContext) and passes them to the AI service.
-* [backend/src/services/ai.service.ts](file:///Users/riyakarmakar/Documents/AWS%20navigation%20ext/backend/src/services/ai.service.ts): Formulates prompts for OpenRouter API completions using `openai/gpt-4o`. Implements loop detection rules and transforms the unstructured LLM response back into a strictly structured guidance step JSON object.
+
+- [backend/src/server.ts](file:///Users/raushan/AWS-nav-extenstion/backend/src/server.ts): Express server entry point. Defines CORS rules to accommodate requests originating from the chrome-extension protocol, initializes middleware, and spins up the HTTP server on port 8000.
+- [backend/src/routes/navigation.routes.ts](file:///Users/raushan/AWS-nav-extenstion/backend/src/routes/navigation.routes.ts): Defines the `/api/next-step` route. It validates request parameters (goal, history list, pageContext) and passes them to the AI service.
+- [backend/src/services/ai.service.ts](file:///Users/raushan/AWS-nav-extenstion/backend/src/services/ai.service.ts): Formulates prompts for OpenRouter API completions using `openai/gpt-4o`. Implements loop detection rules and transforms the unstructured LLM response back into a strictly structured guidance step JSON object.
 
 #### Extension
-* [extension/manifest.json](file:///Users/riyakarmakar/Documents/AWS%20navigation%20ext/extension/manifest.json): Configuration manifest detailing Manifest V3 options, active permissions (`storage`, `activeTab`, `scripting`, `tabs`), extension icons, and matching patterns specifying where content scripts are loaded.
-* [extension/background.ts](file:///Users/riyakarmakar/Documents/AWS%20navigation%20ext/extension/background.ts): Background service worker. Functions as a proxy server routing HTTP requests to `http://localhost:3000/api/next-step`. Listens to tab activation changes, and maintains session access permissions across contexts.
-* [extension/content/content.ts](file:///Users/riyakarmakar/Documents/AWS%20navigation%20ext/extension/content/content.ts): Content script bootstrap file. Handles background page triggers, executes local storage checks, starts navigation monitors, and triggers target click callbacks.
-* [extension/content/index.tsx](file:///Users/riyakarmakar/Documents/AWS%20navigation%20ext/extension/content/index.tsx): Content script entry point. Inserts the `#aws-nav-assistant-root` container into the active body of the AWS Console and renders the React App component.
-* [extension/content/App.tsx](file:///Users/riyakarmakar/Documents/AWS%20navigation%20ext/extension/content/App.tsx): Main React application. Represents the floating sidebar widget. Controls the session state machine, UI updates, step lists, error displays, retry hooks, and scrolling overlays.
-* [extension/content/contextGrabber.ts](file:///Users/riyakarmakar/Documents/AWS%20navigation%20ext/extension/content/contextGrabber.ts): Scrapes the page structure. Gathers breadcrumbs, parsed AWS service name (EC2, S3, IAM, etc.), document properties, and ranks interactive DOM targets.
-* [extension/content/highlighter.ts](file:///Users/riyakarmakar/Documents/AWS%20navigation%20ext/extension/content/highlighter.ts): Element finder. Uses a multi-stage search strategy (waterfall search: exact ARIA, text contents, Shadow DOM components, scored matchers, Levenshtein edit distance calculations) to isolate targeted elements, then constructs a Canvas spotlight overlay.
-* [extension/content/navigationWatcher.ts](file:///Users/riyakarmakar/Documents/AWS%20navigation%20ext/extension/content/navigationWatcher.ts): Listens to dynamic Single Page Application (SPA) navigation transitions by tracking history state mutations and waiting for DOM hierarchies to stabilize.
-* [extension/content/sessionManager.ts](file:///Users/riyakarmakar/Documents/AWS%20navigation%20ext/extension/content/sessionManager.ts): Manages active session cycles (creating, pausing, resuming, or completing flows) utilizing chrome storage APIs.
-* [extension/content/sessionStore.ts](file:///Users/riyakarmakar/Documents/AWS%20navigation%20ext/extension/content/sessionStore.ts): Historical helper code handling local storage persistence.
+
+- [extension/manifest.json](file:///Users/raushan/AWS-nav-extenstion/extension/manifest.json): Configuration manifest detailing Manifest V3 options, active permissions (`storage`, `activeTab`, `scripting`, `tabs`), extension icons, and matching patterns specifying where content scripts are loaded.
+- [extension/background.ts](file:///Users/raushan/AWS-nav-extenstion/extension/background.ts): Background service worker. Functions as a proxy server routing HTTP requests to `http://localhost:8000/api/next-step`. Listens to tab activation changes, and maintains session access permissions across contexts.
+- [extension/content/content.ts](file:///Users/raushan/AWS-nav-extenstion/extension/content/content.ts): Content script bootstrap file. Handles background page triggers, executes local storage checks, starts navigation monitors, and triggers target click callbacks.
+- [extension/content/index.tsx](file:///Users/raushan/AWS-nav-extenstion/extension/content/index.tsx): Content script entry point. Inserts the `#aws-nav-assistant-root` container into the active body of the AWS Console and renders the React App component.
+- [extension/content/App.tsx](file:///Users/raushan/AWS-nav-extenstion/extension/content/App.tsx): Main React application. Represents the floating sidebar widget. Controls the session state machine, UI updates, step lists, error displays, retry hooks, and scrolling overlays.
+- [extension/content/contextGrabber.ts](file:///Users/raushan/AWS-nav-extenstion/extension/content/contextGrabber.ts): Scrapes the page structure. Gathers breadcrumbs, parsed AWS service name (EC2, S3, IAM, etc.), document properties, and ranks interactive DOM targets.
+- [extension/content/highlighter.ts](file:///Users/raushan/AWS-nav-extenstion/extension/content/highlighter.ts): Element finder. Uses a multi-stage waterfall search strategy starting with tag-hint deterministic matching, then ARIA labels, text content, Shadow DOM traversal, scored matchers, and Levenshtein edit distance. Renders a spotlight overlay with instruction tooltip. Handles iframe coordinate offsets via `getAbsoluteRect()`.
+- [extension/content/navigationWatcher.ts](file:///Users/raushan/AWS-nav-extenstion/extension/content/navigationWatcher.ts): Listens to dynamic Single Page Application (SPA) navigation transitions by tracking history state mutations and waiting for DOM hierarchies to stabilize.
+- [extension/content/sessionManager.ts](file:///Users/raushan/AWS-nav-extenstion/extension/content/sessionManager.ts): Manages active session cycles (creating, pausing, resuming, or completing flows) utilizing chrome storage APIs.
+- [extension/content/sessionStore.ts](file:///Users/raushan/AWS-nav-extenstion/extension/content/sessionStore.ts): Historical helper code handling local storage persistence.
 
 ---
 
@@ -89,40 +66,28 @@ The application implements a cyclical step-by-step guidance workflow:
 
 ---
 
-## Known Issues and Enhancement Requirements
+## Resolved Issues (for historical reference)
 
-The following two development requirements must be resolved in the codebase:
+The following issues were identified during development and have been resolved:
 
-### Requirement 1: Improved Context Grabbing (`contextGrabber.ts`)
+### Context Grabbing (Resolved)
 
-#### The Problem
-In the AWS Management Console (especially inside complex environments like the EC2 instances dashboard), critical actions and navigation controls (such as the main "Launch instance" button) are frequently built using nested elements inside generic `div` or `span` elements, or contain custom layout structures.
-* Currently, `scanAndRankElements()` queries only explicit interactives:
-  ```ts
-  'button, a[href], [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="option"], input:not([type="hidden"]), select, textarea'
-  ```
-* Because wrapper `div` and `span` tags are ignored, custom action elements that lack formal HTML role descriptors are omitted. Consequently, the LLM prompt does not receive them in the context block, which breaks navigation paths.
+The context grabber now scans **real action HTML tags only** (`a`, `button`, `input`, `select`, `textarea`) across three DOM layers:
 
-#### The viable Solution(try to go through it and see if it works, if it doesn't sound good add some other logics for optimization)
-Enhance the scanning process in [contextGrabber.ts](file:///Users/riyakarmakar/Documents/AWS%20navigation%20ext/extension/content/contextGrabber.ts):
-1. **Extend Element Selectors:** Include `div` and `span` elements in the queried candidates if they represent interactive targets.
-2. **Interactive Filtering Rules:** Apply strict filters to separate actionable wrappers from general structural divs:
-   * Evaluate CSS cursor styling (e.g. `cursor: pointer`).
-   * Check for presence of inline `onclick` event properties.
-   * Look for specific attributes that indicate interactive contexts (such as `data-analytics-metadata` containing button actions or command text).
-   * Include elements containing compact action instructions that wrap smaller clickable items, provided they are not located too deep in the hierarchy.
-3. **De-duplication:** Prevent nested duplicates. If a container `div` wraps an already captured `button`, do not add both elements to the context list. Prefer the leaf element.
-4. **Token Control:** Do not include general structural divs containing long paragraphs or large text blocks. Text labels for captured elements must remain short (capped at 80-120 characters) to avoid exceeding the prompt length limits.
+1. **Main document** — standard `querySelectorAll`
+2. **Same-origin iframes** — AWS Console renders service content inside iframes; the grabber accesses them via `contentDocument` and recurses into nested iframes
+3. **Shadow DOMs** — AWS uses `awsui-*` web components; a `TreeWalker` finds shadow roots and scans inside them
 
----
+Input elements capture `value`, `placeholder`, `inputType`, and `name`. Labels are resolved via `aria-labelledby` (with shadow root awareness using `getRootNode()`), `aria-label`, `label[for]`, parent labels, `name`, and `placeholder` — in that priority order. Text is capped at 80 chars for buttons/links and 60 chars for input labels to control prompt token usage.
 
-### Requirement 2: Reliable State Persistence Across Refreshes
+### State Persistence (Resolved)
 
-#### The Problem
-Refreshing the active AWS Console window clears the extension memory space and breaks the current guidance state, resetting the user to the initial welcome screen.
-* **Storage Key Conflicts:** The code implements two different storage stores with different keys:
-  * [sessionStore.ts](file:///Users/riyakarmakar/Documents/AWS%20navigation%20ext/extension/content/sessionStore.ts) records states under the key `"aws_nav_session"`.
-  * [sessionManager.ts](file:///Users/riyakarmakar/Documents/AWS%20navigation%20ext/extension/content/sessionManager.ts) records states under the key `"aws_nav_active_session"`.
-* **State Loss on Reload:** When a page reload occurs, the content scripts and React App (`App.tsx`) unmount and rebuild. The initialization code fails to consistently retrieve or re-hydrate the existing state before rendering.
+Session state uses a single storage key (`aws_nav_active_session`) in `chrome.storage.session`. The legacy `sessionStore.ts` key conflict has been superseded by `sessionManager.ts`. On mount, `App.tsx` re-hydrates the session and message history. `stopSession()` fully clears the session from storage so no stale state triggers unwanted LLM calls on navigation.
 
+### Element Matching Accuracy (Resolved)
 
+The highlighter now uses **tag-based deterministic matching** (Strategy 0). When the LLM returns `targetText`, `App.tsx` looks it up in the element list that was sent to the LLM to find the exact `tagName` and CSS `selector`. These are stored as `tagHint` and `selectorHint` on the step. The highlighter searches for elements matching that specific HTML tag with matching text, eliminating false positives from same-text elements of different tag types.
+
+### Input Element Interaction (Resolved)
+
+Input elements (`input`, `textarea`, `select`) no longer auto-advance the guidance step on click. Clicking an input focuses it for typing. The user advances to the next step via the "Next" button. The LLM returns multi-step arrays for form pages (all fields + submit button), cycled locally without extra LLM calls.
