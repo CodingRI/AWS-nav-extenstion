@@ -55,7 +55,8 @@ router.post('/next-step', async (req: Request, res: Response) => {
 
     console.log('[Route /next-step] Result:', {
       success: result.success,
-      instruction: result.step?.instruction?.substring(0, 60),
+      stepsCount: result.steps?.length,
+      firstInstruction: result.steps?.[0]?.instruction?.substring(0, 60),
       isComplete: result.isComplete,
     });
     console.log('[Route /next-step] ────────────────────────────');

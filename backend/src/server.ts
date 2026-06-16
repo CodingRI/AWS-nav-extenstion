@@ -12,7 +12,7 @@ if (!process.env.OPENROUTER_API_KEY) {
 }
 
 const app: Express = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8000;
 
 // Middleware
 app.use(cors({
