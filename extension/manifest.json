@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "description": "AI-powered assistant to guide you through AWS console navigation",
 
-  "permissions": ["storage", "activeTab", "scripting"],
+  "permissions": ["storage", "activeTab", "scripting", "tabs"],
 
   "host_permissions": [
     "*://*.console.aws.amazon.com/*",
