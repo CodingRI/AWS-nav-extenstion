@@ -1,10 +1,6 @@
 # AWS Navigation Assistant
 
 
-##  Disclaimer 🛑🛑
-I have not published this one on the Chrome web store, because it is still very unstable, and needs a lot of optimisation. And of course who can avid the token cost 😀, so if you want to use the functionality, clone it locally and follow the instructions below to run it.
-Also if you have any suggestion to improve the whole architecture, be that detecting the correct element and the accuracy of it, state retention on different pages or any other idea, you can simply share. I will really appreciate. 
-
 [![License: ISC](https://img.shields.io/badge/License-ISC-blue.svg)](https://opensource.org/licenses/ISC)
 [![React](https://img.shields.io/badge/React-19-blue.svg?logo=react)](https://react.dev/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-blue.svg?logo=typescript)](https://www.typescriptlang.org/)
