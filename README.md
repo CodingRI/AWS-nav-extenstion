@@ -23,7 +23,7 @@ The project is a monorepo with three packages:
 │   └── src/index.ts         # InteractiveElement, GuidanceStep, PageContext, etc.
 ├── extension/               # Chrome Extension (Manifest V3)
 │   ├── manifest.json        # Permissions, content script matching patterns
-│   ├── background.ts        # Service worker — proxies requests to backend
+│   ├── background.ts        # Service worker — handles OpenRouter API requests (BYOK)
 │   └── content/             # Content scripts injected into AWS Console
 │       ├── index.tsx         # Mounts React app into #aws-nav-assistant-root
 │       ├── App.tsx           # Main UI — chat widget, session control, step cycling
@@ -33,12 +33,7 @@ The project is a monorepo with three packages:
 │       ├── highlighter.ts    # Element finder (waterfall) + spotlight overlay
 │       ├── navigationWatcher.ts # SPA navigation + visibility detection
 │       └── sessionManager.ts # Session CRUD via chrome.storage.session
-└── backend/                 # Express server
-    └── src/
-        ├── server.ts         # Express app, CORS, port 8000
-        ├── routes/           # POST /api/next-step, GET /api/health
-        └── services/
-            └── ai.service.ts # Prompt engineering + OpenRouter API client
+└── backend/                 # Legacy Express server (deprecated by BYOK architecture)
 ```
 
 ---
@@ -93,10 +88,10 @@ grabPageContext()
 
 Output format: `[input: Bucket name]`, `[textarea: Description]`, `[dropdown: Region]`
 
-#### Phase 2: LLM Request (`App.tsx` → `background.ts` → `ai.service.ts`)
+#### Phase 2: LLM Request (`App.tsx` → `background.ts` → `OpenRouter`)
 
 ```
-App.tsx                          background.ts                    ai.service.ts
+App.tsx                          background.ts                    OpenRouter API
   │                                │                                │
   ├─ Trim element list             │                                │
   │  (keep: tagName, text,         │                                │
@@ -105,25 +100,17 @@ App.tsx                          background.ts                    ai.service.ts
   │   name)                        │                                │
   │                                │                                │
   ├─ Build NextStepRequest ──────> │                                │
-  │  {goal, pageContext,           ├─ POST /api/next-step ────────> │
-  │   history, sessionId}          │                                ├─ buildContextAwarePrompt()
-  │                                │                                │    ├─ Format element list
-  │                                │                                │    ├─ Format completed steps
-  │                                │                                │    ├─ Detect navigation loops
-  │                                │                                │    └─ Inject form state
+  │  {goal, pageContext,           ├─ POST https://openrouter.ai/ ─>│
+  │   history, sessionId}          │                                │
+  │                                │                                ├─ LLM processes prompt
   │                                │                                │
-  │                                │                                ├─ Send to OpenRouter (GPT-4o)
-  │                                │                                │    temperature: 0.2
-  │                                │                                │    max_tokens: 1500
-  │                                │                                │    response_format: json_object
-  │                                │                                │
-  │                                │                                ├─ parseStructuredResponse()
-  │                                │  <──────────────────────────── ├─ Return NextStepResponse
-  │  <──────────────────────────── │                                │    {steps[], isComplete, message}
+  │                                ├─ Parse structured JSON         │
+  │  <──────────────────────────── ├─ Return NextStepResponse       │
+  │                                │    {steps[], isComplete}       │
   │                                │                                │
 ```
 
-**LLM prompt rules** (from `getSystemPrompt()`):
+**LLM prompt rules**:
 
 - For **form pages**: return ALL fields + submit button as separate steps
 - For **navigation pages**: return a single step
@@ -244,7 +231,6 @@ sequenceDiagram
     participant Grabber as Context Grabber
     participant Mgr as Session Manager
     participant BG as Background Worker
-    participant API as Backend (Express)
     participant LLM as OpenRouter (GPT-4o)
     participant High as Highlighter
     participant AWS as AWS Console DOM
@@ -259,10 +245,8 @@ sequenceDiagram
 
         App->>App: Trim element list (keep tagName, text, ariaLabel, role, value, ...)
         App->>BG: REQUEST_NEXT_STEP {goal, pageContext, history}
-        BG->>API: POST /api/next-step
-        API->>LLM: System prompt + formatted element list + history
-        LLM-->>API: JSON {steps[], isComplete, message}
-        API-->>BG: NextStepResponse
+        BG->>LLM: System prompt + formatted element list + history
+        LLM-->>BG: JSON {steps[], isComplete, message}
         BG-->>App: NextStepResponse
 
         App->>App: Tag-hint lookup (match targetText → element list → tagHint)
@@ -312,14 +296,11 @@ https://github.com/user-attachments/assets/84ed96f3-3ca9-445c-8135-3fce382e4057
 - **Styling:** TailwindCSS v4 & Custom CSS (glassmorphism, pulse animations)
 - **Icons:** Lucide React
 - **Environment:** Chrome Extensions Manifest V3
+- **LLM Provider:** OpenRouter (Direct integration via BYOK architecture)
 
-### Backend Service
+### Backend Service (Deprecated)
 
-- **Framework:** Express 5 (TypeScript)
-- **Runtime:** Node.js with `tsx` for hot-reload development
-- **API Client:** Axios
-- **LLM Provider:** OpenRouter (`openai/gpt-4o`, temperature 0.2, JSON mode)
-- **Configuration:** dotenv
+- The legacy Express backend service is no longer required. The extension uses a BYOK (Bring Your Own Key) architecture to communicate directly with OpenRouter via the background service worker.
 
 ### Shared Library
 
@@ -342,40 +323,22 @@ https://github.com/user-attachments/assets/84ed96f3-3ca9-445c-8135-3fce382e4057
 npm run install:all
 ```
 
-### 2. Configure Environment
+### 2. Start Development
 
 ```bash
-cp backend/.env.example backend/.env
+npm run dev:extension
 ```
 
-Edit `backend/.env`:
+This starts the extension bundler via Vite (output to `extension/dist`).
 
-```env
-PORT=8000
-NODE_ENV=development
-OPENROUTER_API_KEY=your_openrouter_api_key_here
-OPENROUTER_SITE_URL=http://localhost:3000
-OPENROUTER_SITE_NAME="AWS Navigator"
-```
-
-### 3. Start Development
-
-```bash
-npm run dev
-```
-
-This starts:
-
-- Express backend on `http://localhost:3000` (with tsx watcher)
-- Extension bundler via Vite (output to `extension/dist`)
-
-### 4. Load in Chrome
+### 3. Load in Chrome
 
 1. Navigate to `chrome://extensions/`
 2. Enable **Developer mode**
 3. Click **Load unpacked** and select the `extension/dist` folder
 4. Open any [AWS Console](https://console.aws.amazon.com/) page
 5. Click the floating **AWS Navigator** button
+6. Click the settings icon inside the extension to input your OpenRouter API Key (BYOK).
 
 ### Rebuilding Shared Types
 
