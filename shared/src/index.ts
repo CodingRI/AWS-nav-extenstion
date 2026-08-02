@@ -1,82 +1,76 @@
 // ============================================================
-// AWS Navigation Assistant — Shared Types (v2)
+// AWS Navigation Assistant — Shared Types
 // ============================================================
 
-// ----- Message Types (content script ↔ background ↔ backend) -----
+// ----- Message Types (content script ↔ background) -----
 
 export const MessageType = {
-  // New dynamic flow
   REQUEST_NEXT_STEP: "REQUEST_NEXT_STEP",
   STEP_RESULT: "STEP_RESULT",
   GRAB_CONTEXT: "GRAB_CONTEXT",
   CONTEXT_RESULT: "CONTEXT_RESULT",
-
-  // Guidance lifecycle
+  VALIDATE_OPENROUTER_KEY: "VALIDATE_OPENROUTER_KEY",
+  LIST_OPENROUTER_MODELS: "LIST_OPENROUTER_MODELS",
   PAUSE_GUIDANCE: "PAUSE_GUIDANCE",
   RESUME_GUIDANCE: "RESUME_GUIDANCE",
   STOP_GUIDANCE: "STOP_GUIDANCE",
-
-  // Legacy (kept for reference, will be removed in Chunk 3)
   HIGHLIGHT_ELEMENT: "HIGHLIGHT_ELEMENT",
   CLEAR_HIGHLIGHTS: "CLEAR_HIGHLIGHTS",
   PAGE_CHANGED: "PAGE_CHANGED",
   GUIDE_COMPLETED: "GUIDE_COMPLETED",
 } as const;
 
-export type MessageTypeValue =
-  (typeof MessageType)[keyof typeof MessageType];
+export type MessageTypeValue = (typeof MessageType)[keyof typeof MessageType];
 
-// ----- Page Context (Phase 1 output) -----
+// ----- Page Context -----
 
-/** A single interactive element found on the page */
+/** A single interactive element found on the page. */
 export interface InteractiveElement {
   tagName: string;
   text: string;
   ariaLabel: string | null;
   dataAnalytics: string | null;
   role: string | null;
-  selector: string;        // best-effort CSS selector for this element
+  selector: string;
   isVisible: boolean;
-  value?: string;           // current value of input/select/textarea
-  placeholder?: string;     // placeholder text
-  inputType?: string;       // input type attribute (text, search, checkbox, etc.)
-  name?: string;            // name attribute
+  value?: string;
+  placeholder?: string;
+  inputType?: string;
+  name?: string;
 }
 
-/** Full context of the current AWS Console page */
+/** Full context of the current AWS Console page. */
 export interface PageContext {
   url: string;
-  service: string;         // e.g. "EC2", "S3", "IAM"
-  view: string;            // e.g. "Instances list", "Bucket details"
-  title: string;           // document.title
+  service: string;
+  view: string;
+  title: string;
   visibleButtons: InteractiveElement[];
   breadcrumb: string[];
-  formState: Record<string, string>;  // open form fields, active tabs, etc.
+  formState: Record<string, string>;
 }
 
-// ----- Guidance Step (Phase 3 output — from LLM) -----
+// ----- Guidance -----
 
 export interface GuidanceStep {
-  instruction: string;     // human-readable: "Click the 'Create bucket' button"
-  targetSelector: string;  // ARIA label, text label, or CSS selector
-  targetText: string;      // visible text of the target element
-  fallbackText : string,
-  waitFor: string;         // what should appear after clicking (for DOM settle)
-  stepIndex: number;       // 0-based, incremented by session manager
-  pageUrl?: string;        // URL where this step was issued
-  completedAt?: number;    // timestamp when user clicked the target
-  tagHint?: string;        // HTML tag from element list lookup (e.g. "a", "button")
-  selectorHint?: string;   // CSS selector from element list lookup
+  instruction: string;
+  targetSelector: string;
+  targetText: string;
+  fallbackText: string;
+  waitFor: string;
+  stepIndex: number;
+  pageUrl?: string;
+  completedAt?: number;
+  tagHint?: string;
+  selectorHint?: string;
 }
-
-// ----- Guidance Session (persisted across SPA navigations) -----
 
 export interface SessionMessage {
   id: string;
-  type: 'user' | 'assistant' | 'system' | 'error';
+  type: "user" | "assistant" | "system" | "error";
   content: string;
   timestamp: number;
-  retryAction?: 'retry-step' | 'retry-fresh';
+  retryAction?: "retry-step" | "retry-fresh";
 }
 
 export type GuidanceStatus = "active" | "paused" | "completed" | "stopped";
@@ -87,15 +81,13 @@ export interface GuidanceSession {
   steps: GuidanceStep[];
   currentStepIndex: number;
   status: GuidanceStatus;
-  activeUrl: string;       // URL where guidance is currently active
-  pausedUrl?: string;      // URL where guidance was paused (for auto-resume)
-  pausedStepInstruction?: string; // instruction of the step that was active when paused
+  activeUrl: string;
+  pausedUrl?: string;
+  pausedStepInstruction?: string;
   lastActivityTimestamp: number;
   createdAt: number;
   messages?: SessionMessage[];
 }
-
-// ----- API Request / Response (content script → backend) -----
 
 export interface NextStepRequest {
   goal: string;
@@ -106,25 +98,104 @@ export interface NextStepRequest {
 
 export interface NextStepResponse {
   success: boolean;
-  steps: GuidanceStep[];   // array of steps for the current page (highlighted one by one)
-  isComplete: boolean;     // true when AI says the goal is done
-  message?: string;        // optional AI message (e.g. "Goal complete!")
+  steps: GuidanceStep[];
+  isComplete: boolean;
+  message?: string;
   error?: string;
 }
 
-// ----- Extension Messages (content script ↔ background) -----
+// ----- OpenRouter -----
 
-export interface ExtensionMessage {
-  type: MessageTypeValue;
-  payload?: any;
+export interface OpenRouterConfiguration {
+  apiKey: string;
+  selectedModel: string;
+  savedAt: number;
 }
 
-export interface NextStepMessage extends ExtensionMessage {
+export interface OpenRouterConfigurationStatus {
+  hasApiKey: boolean;
+  selectedModel: string | null;
+  isConfigured: boolean;
+}
+
+export interface OpenRouterModel {
+  id: string;
+  name: string;
+  provider: string;
+  description?: string;
+  contextLength?: number;
+  promptPricing?: string;
+  completionPricing?: string;
+}
+
+export interface OpenRouterRawModel {
+  id: string;
+  name?: string;
+  description?: string;
+  context_length?: number;
+  pricing?: {
+    prompt?: string;
+    completion?: string;
+  };
+}
+
+export interface OpenRouterModelsResponse {
+  data: OpenRouterRawModel[];
+}
+
+export interface OpenRouterChatCompletionResponse {
+  choices?: Array<{
+    message?: {
+      content?: string;
+    };
+  }>;
+}
+
+export type OpenRouterErrorCode =
+  | "not_configured"
+  | "invalid_key"
+  | "auth_invalidated"
+  | "rate_limited"
+  | "out_of_credits"
+  | "network_error"
+  | "server_error"
+  | "unknown_error";
+
+export interface OpenRouterClientError {
+  code: OpenRouterErrorCode;
+  message: string;
+  status?: number;
+  shouldClearConfiguration?: boolean;
+}
+
+export interface OpenRouterValidationResult {
+  models: OpenRouterModel[];
+  suggestedModel: string;
+}
+
+// ----- Runtime Messages -----
+
+export interface ExtensionMessage<TPayload = unknown> {
+  type: MessageTypeValue;
+  payload?: TPayload;
+}
+
+export interface RuntimeResult<TData> {
+  success: boolean;
+  data?: TData;
+  error?: OpenRouterClientError;
+}
+
+export interface ValidateOpenRouterKeyPayload {
+  apiKey: string;
+}
+
+export interface NextStepMessage extends ExtensionMessage<NextStepRequest> {
   type: typeof MessageType.REQUEST_NEXT_STEP;
   payload: NextStepRequest;
 }
 
-export interface StepResultMessage extends ExtensionMessage {
+export interface StepResultMessage extends ExtensionMessage<NextStepResponse> {
   type: typeof MessageType.STEP_RESULT;
   payload: NextStepResponse;
 }
@@ -135,7 +206,7 @@ export interface SessionStorage {
   activeSession: GuidanceSession | null;
 }
 
-// ----- Highlight Styles (kept for reference) -----
+// ----- Highlight Styles -----
 
 export interface HighlightStyle {
   outline?: string;
