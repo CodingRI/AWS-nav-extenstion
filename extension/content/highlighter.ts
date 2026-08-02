@@ -114,7 +114,6 @@ export class ElementHighlighter {
   attachClickDetection(
     el: HTMLElement,
     onTargetClick: () => void,
-    _onOtherClick?: () => void, // kept for API compatibility, no longer used
   ): void {
     // Clean up any previous handlers
     this.detachClickDetection();

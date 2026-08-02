@@ -1,6 +1,8 @@
 import { grabPageContext } from "./contextGrabber";
 import { highlighter } from "./highlighter";
 import { watchForNavigation, waitForDomSettle } from "./navigationWatcher";
+import type { NextStepResponse, RuntimeResult } from "@aws-nav/shared";
+import { MessageType } from "./messageTypes";
 import {
   loadSession,
   saveSession,
@@ -20,25 +22,44 @@ async function onPageReady(): Promise<void> {
 
   const pageContext = await grabPageContext();
 
-  let result;
+  let result: NextStepResponse | null = null;
   try {
-    const response = await fetch("http://localhost:8000/api/next-step", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        goal: session.goal,
-        pageContext,
-        history: session.history,
-        sessionId: `tab-${session.tabId}`,
-      }),
-    });
-    result = await response.json();
+    const response = await new Promise<RuntimeResult<NextStepResponse>>(
+      (resolve, reject) => {
+        chrome.runtime.sendMessage(
+          {
+            type: MessageType.REQUEST_NEXT_STEP,
+            payload: {
+              goal: session.goal,
+              pageContext,
+              history: session.history,
+              sessionId: `tab-${session.tabId}`,
+            },
+          },
+          (runtimeResponse: RuntimeResult<NextStepResponse>) => {
+            const runtimeError = chrome.runtime.lastError;
+            if (runtimeError) {
+              reject(new Error(runtimeError.message));
+              return;
+            }
+            resolve(runtimeResponse);
+          },
+        );
+      },
+    );
+
+    if (!response.success || !response.data) {
+      console.error("[Content] OpenRouter call failed:", response.error?.message);
+      return;
+    }
+
+    result = response.data;
   } catch (err) {
-    console.error("[Content] Backend call failed:", err);
+    console.error("[Content] OpenRouter call failed:", err);
     return;
   }
 
-  if (!result.success) return;
+  if (!result?.success) return;
 
   if (result.isComplete) {
     console.log("[Content] Goal complete!");
