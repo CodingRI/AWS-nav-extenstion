@@ -1,11 +1,15 @@
-import { MessageType } from "@aws-nav/shared";
 import type {
   ExtensionMessage,
   NextStepRequest,
   NextStepResponse,
+  OpenRouterModel,
+  OpenRouterValidationResult,
+  RuntimeResult,
+  ValidateOpenRouterKeyPayload,
 } from "@aws-nav/shared";
-
-const BACKEND_URL = "http://localhost:8000";
+import { OpenRouterRequestError } from "./src/openrouter/errors";
+import { MessageType } from "./src/backgroundMessageTypes";
+import { openRouterClient } from "./src/openrouter/client";
 
 // Track which tab has the active AWS guidance session
 let guidanceTabId: number | null = null;
@@ -17,12 +21,29 @@ chrome.runtime.onMessage.addListener(
 
     switch (message.type) {
       case MessageType.REQUEST_NEXT_STEP:
-        // Track which tab is running guidance
         if (sender.tab?.id) {
           guidanceTabId = sender.tab.id;
         }
-        handleNextStepRequest(message.payload as NextStepRequest, sendResponse);
-        return true; // Keep channel open for async response
+        void handleNextStepRequest(
+          message.payload as NextStepRequest,
+          sendResponse as (response: RuntimeResult<NextStepResponse>) => void,
+        );
+        return true;
+
+      case MessageType.VALIDATE_OPENROUTER_KEY:
+        void handleValidateKey(
+          message.payload as ValidateOpenRouterKeyPayload,
+          sendResponse as (
+            response: RuntimeResult<OpenRouterValidationResult>,
+          ) => void,
+        );
+        return true;
+
+      case MessageType.LIST_OPENROUTER_MODELS:
+        void handleListModels(
+          sendResponse as (response: RuntimeResult<OpenRouterModel[]>) => void,
+        );
+        return true;
 
       case MessageType.STOP_GUIDANCE:
         guidanceTabId = null;
@@ -47,46 +68,60 @@ chrome.runtime.onMessage.addListener(
   },
 );
 
-/**
- * Proxy next-step requests from content script to backend.
- */
 async function handleNextStepRequest(
   payload: NextStepRequest,
-  sendResponse: (response: any) => void,
-) {
+  sendResponse: (response: RuntimeResult<NextStepResponse>) => void,
+): Promise<void> {
   try {
-    console.log(
-      "[Background] Proxying next-step request for goal:",
-      payload.goal,
-    );
-
-    const response = await fetch(`${BACKEND_URL}/api/next-step`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
-    });
-
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-
-    const data: NextStepResponse = await response.json();
-    console.log(
-      "[Background] Received steps:",
-      data.steps?.length,
-      data.steps?.[0]?.instruction?.substring(0, 50),
-    );
-
+    const data = await openRouterClient.generateNextStep(payload);
     sendResponse({ success: true, data });
   } catch (error) {
-    console.error("[Background] Error:", error);
+    sendOpenRouterError(sendResponse, error);
+  }
+}
+
+async function handleValidateKey(
+  payload: ValidateOpenRouterKeyPayload,
+  sendResponse: (response: RuntimeResult<OpenRouterValidationResult>) => void,
+): Promise<void> {
+  try {
+    const data = await openRouterClient.validateApiKey(payload.apiKey);
+    sendResponse({ success: true, data });
+  } catch (error) {
+    sendOpenRouterError(sendResponse, error);
+  }
+}
+
+async function handleListModels(
+  sendResponse: (response: RuntimeResult<OpenRouterModel[]>) => void,
+): Promise<void> {
+  try {
+    const data = await openRouterClient.listModels();
+    sendResponse({ success: true, data });
+  } catch (error) {
+    sendOpenRouterError(sendResponse, error);
+  }
+}
+
+function sendOpenRouterError<TData>(
+  sendResponse: (response: RuntimeResult<TData>) => void,
+  error: unknown,
+): void {
+  if (error instanceof OpenRouterRequestError) {
     sendResponse({
       success: false,
-      error: error instanceof Error ? error.message : "Unknown error",
+      error: error.details,
     });
+    return;
   }
+
+  sendResponse({
+    success: false,
+    error: {
+      code: "unknown_error",
+      message: error instanceof Error ? error.message : "Unknown error",
+    },
+  });
 }
 
 /* ========================================================================
@@ -197,5 +232,5 @@ if (chrome.storage?.session?.setAccessLevel) {
 
 // Log when service worker starts
 console.log(
-  "[Background] Service worker initialized (v2.2 - with session storage access)",
+  "[Background] Service worker initialized (OpenRouter BYOK mode)",
 );

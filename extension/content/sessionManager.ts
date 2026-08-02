@@ -69,10 +69,10 @@ export async function getActiveSession(): Promise<GuidanceSession | null> {
     }
 
     return session;
-  } catch (err: any) {
+  } catch (err: unknown) {
     // Silently ignore context invalidation — happens when extension is reloaded
     // and old content script instances are still running
-    const msg = err?.message || "";
+    const msg = err instanceof Error ? err.message : "";
     if (
       msg.includes("Extension context invalidated") ||
       msg.includes("not allowed from this context") ||
