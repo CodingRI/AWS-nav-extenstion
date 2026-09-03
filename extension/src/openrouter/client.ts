@@ -25,6 +25,7 @@ import {
   extractResponseText,
   parseNextStepResponse,
 } from "./navigationPrompt";
+import { fetchRetrievalContext } from "../retrieval/client";
 
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 const OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions";
@@ -127,6 +128,18 @@ export class OpenRouterClient {
       throw new OpenRouterRequestError(getMissingConfigurationError());
     }
 
+    // First-level retrieval. The knowledge base lives behind the local
+    // backend, so this is a separate hop; it returns null whenever the backend
+    // is absent, slow, or decides the goal is not unusual enough to need help.
+    const retrieval = await fetchRetrievalContext({
+      goal: request.goal,
+      pageContext: request.pageContext,
+      history: request.history,
+      ...(request.sessionId != null ? { sessionId: request.sessionId } : {}),
+    });
+
+    const retrievalContext = retrieval?.promptContext ?? "";
+
     const response = await this.fetchWithFriendlyErrors(
       OPENROUTER_CHAT_URL,
       {
@@ -137,11 +150,11 @@ export class OpenRouterClient {
           messages: [
             {
               role: "system",
-              content: buildNavigationSystemPrompt(),
+              content: buildNavigationSystemPrompt(retrievalContext.length > 0),
             },
             {
               role: "user",
-              content: buildNavigationPrompt(request),
+              content: buildNavigationPrompt(request, retrievalContext),
             },
           ],
           temperature: 0.2,

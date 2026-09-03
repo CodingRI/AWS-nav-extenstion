@@ -9,7 +9,8 @@
   "host_permissions": [
     "*://*.console.aws.amazon.com/*",
     "*://*.aws.amazon.com/*",
-    "https://openrouter.ai/*"
+    "https://openrouter.ai/*",
+    "http://localhost:8000/*"
   ],
 
   "background": {

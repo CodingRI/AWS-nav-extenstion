@@ -4,8 +4,11 @@ import type {
   NextStepResponse,
   OpenRouterChatCompletionResponse,
 } from "@aws-nav/shared";
+import { RETRIEVAL_PROMPT_RULES } from "@aws-nav/shared";
 
-export function buildNavigationSystemPrompt(): string {
+export function buildNavigationSystemPrompt(
+  hasRetrievedKnowledge = false,
+): string {
   return `
 You are an AWS Console navigation expert.
 
@@ -78,10 +81,14 @@ RULES:
 12. NEVER return markdown.
 13. ALWAYS return valid JSON with a "steps" array.
 14. Keep each step's targetText under 60 characters.
+${hasRetrievedKnowledge ? RETRIEVAL_PROMPT_RULES : ""}
 `;
 }
 
-export function buildNavigationPrompt(request: NextStepRequest): string {
+export function buildNavigationPrompt(
+  request: NextStepRequest,
+  retrievalContext = "",
+): string {
   const { goal, pageContext, history } = request;
 
   const elementsList = pageContext.visibleButtons
@@ -130,6 +137,10 @@ export function buildNavigationPrompt(request: NextStepRequest): string {
           .join("\n")
       : "No active forms or dialogs.";
 
+  // Knowledge goes above the element list so the element list is the last
+  // thing read before the model chooses a targetText.
+  const knowledgeBlock = retrievalContext ? `\n${retrievalContext}\n` : "";
+
   return `
 USER GOAL:
 ${goal}
@@ -143,7 +154,7 @@ ${pageContext.breadcrumb.length > 0 ? pageContext.breadcrumb.join(" > ") : "None
 
 PAGE STATE:
 ${formStateText}
-
+${knowledgeBlock}
 VISIBLE ELEMENTS (${pageContext.visibleButtons.length}):
 
 ${elementsList || "No elements found"}
